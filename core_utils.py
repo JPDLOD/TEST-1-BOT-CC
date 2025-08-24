@@ -37,13 +37,16 @@ def human_eta(target_dt: datetime, now: Optional[datetime] = None) -> str:
     hours = mins // 60
     mins = mins % 60
     if hours < 24:
-        return f"en {hours} h {mins} m" if mins else f"en {hours} h"
+        if mins:
+            return f"en {hours} h {mins} m"
+        return f"en {hours} h"
     days = hours // 24
     hours = hours % 24
-    return f"en {days} d {hours} h" if hours else f"en {days} d"
+    if hours:
+        return f"en {days} d {hours} h"
+    return f"en {days} d"
 
 def extract_id_from_text(txt: str) -> Optional[int]:
-    """Extrae un ID desde '/cmd <id>' o '/cmd id:<id>'."""
     parts = (txt or "").split()
     for p in parts[1:]:
         if p.isdigit():
