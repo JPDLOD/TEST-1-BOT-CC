@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from config import TARGET_CHAT_ID, BACKUP_CHAT_ID, PREVIEW_CHAT_ID
-from publisher import is_active_backup  # lee el estado en tiempo real
+from publisher import is_active_backup
 
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -15,7 +15,6 @@ def kb_main() -> InlineKeyboardMarkup:
     )
 
 def text_main() -> str:
-    # Lista completa, sin resumir.
     return (
         "🛠️ Comandos:\n"
         "• /listar — muestra borradores pendientes (excluye los programados)\n"
@@ -25,15 +24,12 @@ def text_main() -> str:
         "• /nuke all|todos | /nuke 1,3,5 | /nuke 1-10 | /nuke N(últimos)\n"
         "• /enviar — publica ahora a targets activos (los programados NO se mezclan)\n"
         "• /preview — manda la cola a PREVIEW sin marcar como enviada\n"
-        "• /programar YYYY-MM-DD HH:MM — programa lo que está en /listar (formato 24h, sin AM/PM)\n"
+        "• /programar YYYY-MM-DD HH:MM — programa lo que está en /listar (formato 24h: 00:00–23:59, sin AM/PM)\n"
         "• /programados — muestra programaciones pendientes y cuánto falta\n"
         "• /desprogramar <id|all> — cancela por id o todas\n"
         "• /id [id] — info del mensaje o, si respondes, te dice el ID\n"
         "• /canales — IDs + estado de targets (alias: /targets, /where)\n"
-        "• /backup on|off — alterna SOLO el backup (principal siempre ON)\n"
-        "• Regla de botón: agrega una línea `@@@ TextoDelBotón | https://telegra.ph/...` en el borrador.\n"
-        "  Al publicar: se quita esa línea, se añade un botón con ese texto y el link queda en el cuerpo para\n"
-        "  que Telegram muestre *Instant View* si aplica.\n\n"
+        "• /backup on|off — alterna SOLO el backup (principal siempre ON)\n\n"
         "Pulsa un botón o usa /comandos para volver a ver este panel."
     )
 
@@ -54,4 +50,25 @@ def text_settings() -> str:
         f"• Preview  : `{PREVIEW_CHAT_ID}`\n\n"
         "Usa el botón para alternar backup.\n"
         "⬅️ *Volver* regresa al menú principal."
+    )
+
+def kb_schedule() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("⏳ +5 min", callback_data="s:+5"),
+             InlineKeyboardButton("⏳ +15 min", callback_data="s:+15")],
+            [InlineKeyboardButton("🕗 Hoy 20:00", callback_data="s:today20"),
+             InlineKeyboardButton("🌅 Mañana 07:00", callback_data="s:tom07")],
+            [InlineKeyboardButton("🗒 Ver programados", callback_data="s:list"),
+             InlineKeyboardButton("❌ Cancelar todos", callback_data="s:clear")],
+            [InlineKeyboardButton("✍️ Custom", callback_data="s:custom"),
+             InlineKeyboardButton("⬅️ Volver", callback_data="m:back")]
+        ]
+    )
+
+def text_schedule() -> str:
+    return (
+        "⏰ Programar envío de **los borradores actuales**.\n"
+        "Elige un atajo o usa `/programar YYYY-MM-DD HH:MM` (formato 24h: 00:00–23:59, sin '(24h)' ni AM/PM).\n"
+        "⚠️ Si no hay borradores, no se programa nada."
     )
