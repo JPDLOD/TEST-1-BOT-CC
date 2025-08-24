@@ -2,46 +2,36 @@
 import json
 import logging
 from typing import List, Tuple, Dict, Set
-
 from telegram.error import RetryAfter, TimedOut, NetworkError, TelegramError
-from telegram.ext import ContextTypes
 
 from config import DB_FILE, SOURCE_CHAT_ID, TARGET_CHAT_ID, BACKUP_CHAT_ID, PAUSE
 from database import get_unsent_drafts, mark_sent
+from utils import safe_sleep
 
 logger = logging.getLogger(__name__)
 
-# ========= Estado de targets =========
-ACTIVE_BACKUP: bool = True  # por defecto ON
-
-def is_active_backup() -> bool:
-    """Lee el estado actual del backup (True/False)."""
-    return ACTIVE_BACKUP
-
-def set_active_backup(value: bool) -> None:
-    """Actualiza el estado global del backup de forma segura."""
-    global ACTIVE_BACKUP
-    ACTIVE_BACKUP = bool(value)
+# Estado de targets
+ACTIVE_BACKUP: bool = True  # por defecto ON al iniciar
 
 def get_active_targets() -> List[int]:
     targets = [TARGET_CHAT_ID]
-    if is_active_backup() and BACKUP_CHAT_ID:
+    if ACTIVE_BACKUP and BACKUP_CHAT_ID:
         targets.append(BACKUP_CHAT_ID)
     return targets
 
-# ========= Contadores / locks (usados por otros módulos) =========
+# Contadores
 STATS = {"cancelados": 0, "eliminados": 0}
+
+# Lock de IDs programados (no se envían con /enviar ni /preview)
 SCHEDULED_LOCK: Set[int] = set()
 
-# ========= Backoff para envíos =========
+# ------------- envío con backoff -------------
 async def _send_with_backoff(func_coro_factory, *, base_pause: float):
     tries = 0
     while True:
         try:
             msg = await func_coro_factory()
-            # pausa corta entre mensajes
-            import asyncio
-            await asyncio.sleep(max(0.0, base_pause))
+            await safe_sleep(base_pause)
             return True, msg
         except RetryAfter as e:
             wait = getattr(e, "retry_after", None)
@@ -50,21 +40,24 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
                 m = re.search(r"Retry in (\d+)", str(e))
                 wait = int(m.group(1)) if m else 3
             logger.warning(f"RetryAfter: esperando {wait}s …")
-            import asyncio
-            await asyncio.sleep(wait + 1.0);  tries += 1
+            await safe_sleep(wait + 1.0)
+            tries += 1
         except TimedOut:
             logger.warning("TimedOut: esperando 3s …")
-            import asyncio
-            await asyncio.sleep(3.0);  tries += 1
+            await safe_sleep(3.0)
+            tries += 1
         except NetworkError:
             logger.warning("NetworkError: esperando 3s …")
-            import asyncio
-            await asyncio.sleep(3.0);  tries += 1
+            await safe_sleep(3.0)
+            tries += 1
         except TelegramError as e:
             if "Flood control exceeded" in str(e):
-                logger.warning("Flood control… esperando 5s …")
-                import asyncio
-                await asyncio.sleep(5.0);  tries += 1
+                import re
+                m = re.search(r"Retry in (\d+)", str(e))
+                wait = int(m.group(1)) if m else 5
+                logger.warning(f"Flood control: esperando {wait}s …")
+                await safe_sleep(wait + 1.0)
+                tries += 1
             else:
                 logger.error(f"TelegramError no recuperable: {e}")
                 return False, None
@@ -76,7 +69,7 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
             logger.error("Demasiados reintentos; abandono este mensaje.")
             return False, None
 
-# ========= Encuestas =========
+# ------------- payload de encuestas -------------
 def _poll_payload_from_raw(raw: dict):
     p = raw.get("poll") or {}
     question = p.get("question", "Pregunta")
@@ -124,9 +117,8 @@ def _poll_payload_from_raw(raw: dict):
 
     return kwargs, is_quiz
 
-# ========= Publicadores =========
-async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple[int, str, str]],
-                         targets: List[int], mark_as_sent: bool) -> Tuple[int, int, Dict[int, List[int]]]:
+# ------------- publicar -------------
+async def publicar_rows(context, *, rows: List[Tuple[int, str, str]], targets: List[int], mark_as_sent: bool):
     publicados = 0
     fallidos = 0
     enviados_ids: List[int] = []
@@ -146,6 +138,28 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
                 kwargs["chat_id"] = dest
                 coro_factory = lambda k=kwargs: context.bot.send_poll(**k)
                 ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
+
+            elif ("reply_markup" in data) and (data.get("text") or data.get("caption")):
+                # Reconstruir texto + teclado (caso @@@). Usamos send_message para conservar el botón.
+                from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+                txt_send = data.get("text") or data.get("caption") or ""
+                kb = None
+                try:
+                    ik = (data.get("reply_markup") or {}).get("inline_keyboard") or []
+                    if ik:
+                        rows_kb = []
+                        for row in ik:
+                            btns = []
+                            for b in row:
+                                btns.append(InlineKeyboardButton(text=b.get("text", ""), url=b.get("url")))
+                            rows_kb.append(btns)
+                        kb = InlineKeyboardMarkup(rows_kb) if rows_kb else None
+                except Exception:
+                    kb = None
+                coro_factory = (lambda d=dest, t=txt_send, k=kb:
+                                context.bot.send_message(chat_id=d, text=t, reply_markup=k, disable_web_page_preview=False))
+                ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
+
             else:
                 coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
                     chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
@@ -169,7 +183,7 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
 
     return publicados, fallidos, posted_by_target
 
-async def publicar(context: ContextTypes.DEFAULT_TYPE, *, targets: List[int], mark_as_sent: bool):
+async def publicar(context, *, targets: List[int], mark_as_sent: bool):
     """Envía la cola completa EXCLUYENDO los bloqueados (SCHEDULED_LOCK)."""
     all_rows = get_unsent_drafts(DB_FILE)  # [(message_id, text, raw_json)]
     if not all_rows:
@@ -177,24 +191,21 @@ async def publicar(context: ContextTypes.DEFAULT_TYPE, *, targets: List[int], ma
     rows = [(m, t, r) for (m, t, r) in all_rows if m not in SCHEDULED_LOCK]
     if not rows:
         return 0, 0, {t: [] for t in targets}
-    return await _publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
+    return await publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
 
-async def publicar_ids(context: ContextTypes.DEFAULT_TYPE, *, ids: List[int],
-                       targets: List[int], mark_as_sent: bool):
-    # Query puntual sin duplicar lógica del módulo database
-    import sqlite3
+async def publicar_ids(context, *, ids: List[int], targets: List[int], mark_as_sent: bool):
+    from database import _conn  # para query ad-hoc
     if not ids:
         return 0, 0, {t: [] for t in targets}
     placeholders = ",".join("?" for _ in ids)
     sql = f"SELECT message_id, snippet, raw_json FROM drafts WHERE sent=0 AND deleted=0 AND message_id IN ({placeholders}) ORDER BY message_id ASC"
-    con = sqlite3.connect(DB_FILE)
-    cur = con.cursor()
-    rows = list(cur.execute(sql, ids).fetchall())
-    con.close()
+    c = _conn(DB_FILE)
+    cur = c.execute(sql, ids)
+    rows = list(cur.fetchall())
     if not rows:
         return 0, 0, {t: [] for t in targets}
-    return await _publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
+    return await publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
 
-async def publicar_todo_activos(context: ContextTypes.DEFAULT_TYPE):
-    pubs, fails, _ = await publicar(context, targets=get_active_targets(), mark_as_sent=True)
+async def publicar_todo_activos(context):
+    pubs, fails, _posted = await publicar(context, targets=get_active_targets(), mark_as_sent=True)
     return pubs, fails
