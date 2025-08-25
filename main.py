@@ -399,3 +399,84 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 rid = update.channel_post.reply_to_message.message_id
                 await context.bot.send_message(SOURCE_CHAT_ID, f"🆔 ID del mensaje: {rid}")
             else:
+                mid = extract_id_from_text(txt) or (txt.split()[1] if len(txt.split()) > 1 and txt.split()[1].isdigit() else None)
+                if not mid:
+                    await context.bot.send_message(SOURCE_CHAT_ID, "Usa: /id <id> o responde a un mensaje con /id.")
+                else:
+                    mid = int(mid)
+                    link = deep_link_for_channel_message(SOURCE_CHAT_ID, mid)
+                    await context.bot.send_message(SOURCE_CHAT_ID, f"🆔 {mid}\n• Enlace: {link}")
+            await _delete_user_command_if_possible(update, context);  return
+
+        if low.startswith(("/canales", "/targets", "/where")):
+            await context.bot.send_message(SOURCE_CHAT_ID, text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
+            await _delete_user_command_if_possible(update, context);  return
+
+        if low.startswith("/backup"):
+            parts = txt.split(maxsplit=1)
+            arg = parts[1] if len(parts) > 1 else ""
+            await _cmd_backup(context, arg)
+            await _delete_user_command_if_possible(update, context);  return
+
+        if low.startswith(("/comandos", "/comando", "/ayuda", "/start")):
+            await context.bot.send_message(SOURCE_CHAT_ID, text_main(), reply_markup=kb_main())
+            await _delete_user_command_if_possible(update, context);  return
+
+        await context.bot.send_message(SOURCE_CHAT_ID, "Comando no reconocido. Usa /comandos.")
+        await _delete_user_command_if_possible(update, context)
+        return
+
+    # --------- NO COMANDO → GUARDAR BORRADOR ----------
+    snippet = msg.text or msg.caption or ""
+    raw_json = json.dumps(msg.to_dict(), ensure_ascii=False)
+    save_draft(DB_FILE, msg.message_id, snippet, raw_json)
+    logger.info(f"Guardado en borrador: {msg.message_id}")
+
+# ========= ERROR HANDLER =========
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("Excepción no capturada", exc_info=context.error)
+
+# ========= set bot commands (menú de comandos) =========
+async def _set_bot_commands(app: Application):
+    try:
+        await app.bot.set_my_commands([
+            ("comandos", "Ver ayuda y botones"),
+            ("listar", "Mostrar borradores pendientes (excluye programados)"),
+            ("enviar", "Publicar ahora a targets activos"),
+            ("preview", "Enviar cola a PREVIEW (no marca enviada)"),
+            ("programar", "Programar (24h: YYYY-MM-DD HH:MM)"),
+            ("programados", "Ver programaciones pendientes"),
+            ("desprogramar", "Cancelar una programación (id|all)"),
+            ("cancelar", "Quitar de la cola (no borra del canal)"),
+            ("deshacer", "Revertir el último /cancelar"),
+            ("eliminar", "Borrar del canal y de la cola"),
+            ("nuke", "Borrar varios (all | 1,3,5 | 1-10 | N)"),
+            ("id", "Mostrar ID del mensaje"),
+            ("canales", "Ver IDs y estado de targets"),
+            ("backup", "ON/OFF para backup"),
+        ])
+    except Exception:
+        pass
+
+# ========= MAIN =========
+def main():
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
+
+    app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+
+    app.add_error_handler(on_error)
+
+    logger.info("Bot iniciado 🚀 Escuchando channel_post en el BORRADOR.")
+
+    # set comandos visibles (no afecta al canal si Telegram no los muestra ahí)
+    app.post_init = _set_bot_commands
+
+    app.run_polling(allowed_updates=["channel_post", "callback_query"], drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
