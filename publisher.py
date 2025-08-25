@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
-from typing import List, Tuple, Dict, Set
+from typing import List, Tuple, Dict, Set, Optional
 
 from telegram.error import RetryAfter, TimedOut, NetworkError, TelegramError
 from telegram.ext import ContextTypes
@@ -32,6 +32,9 @@ def get_active_targets() -> List[int]:
 # ========= Contadores / locks (usados por otros módulos) =========
 STATS = {"cancelados": 0, "eliminados": 0}
 SCHEDULED_LOCK: Set[int] = set()
+
+# ========= Cache para respuestas correctas detectadas =========
+CORRECT_ANSWERS_CACHE: Dict[int, int] = {}  # {message_id: correct_option_index}
 
 # ========= Backoff para envíos =========
 async def _send_with_backoff(func_coro_factory, *, base_pause: float):
@@ -76,8 +79,157 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
             logger.error("Demasiados reintentos; abandono este mensaje.")
             return False, None
 
-# ========= Encuestas - CORREGIDO =========
-def _poll_payload_from_raw(raw: dict):
+# ========= Funciones para detectar la respuesta correcta =========
+
+def _detect_user_vote_from_poll(poll_data: dict) -> Optional[int]:
+    """
+    MÉTODO 1: Detecta cuál opción votó el usuario (tú) en la encuesta.
+    Busca en los resultados de la poll cuál opción tiene voter_count > 0
+    y fue votada por el creador.
+    """
+    try:
+        # Si hay resultados de votos
+        if "results" in poll_data:
+            results = poll_data["results"]
+            if "results" in results:
+                result_list = results["results"]
+                
+                # Buscar la opción con votos (asumiendo que solo tú votaste)
+                for i, option_result in enumerate(result_list):
+                    if option_result and option_result.get("voter_count", 0) > 0:
+                        logger.info(f"🗳️ MÉTODO 1: Detectado voto del usuario en opción {i} (letra {chr(65+i)})")
+                        return i
+                        
+        # También revisar en la estructura de opciones directamente
+        options = poll_data.get("options", [])
+        for i, option in enumerate(options):
+            if option and option.get("voter_count", 0) > 0:
+                logger.info(f"🗳️ MÉTODO 1: Detectado voto en opción {i} via options (letra {chr(65+i)})")
+                return i
+                
+    except Exception as e:
+        logger.error(f"Error detectando voto del usuario: {e}")
+    
+    return None
+
+def _parse_answer_hint_from_db(message_id: int) -> Optional[int]:
+    """
+    MÉTODO 2: Busca mensajes con patrón ###X cerca del message_id de la encuesta.
+    Busca en la base de datos mensajes anteriores o posteriores con el patrón.
+    """
+    try:
+        import sqlite3
+        import re
+        
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        
+        # Buscar mensajes cerca del message_id actual (±5 mensajes)
+        query = """
+        SELECT message_id, snippet, raw_json 
+        FROM drafts 
+        WHERE message_id BETWEEN ? AND ? 
+        AND deleted = 0
+        ORDER BY message_id ASC
+        """
+        
+        range_start = message_id - 5
+        range_end = message_id + 5
+        
+        results = cur.execute(query, (range_start, range_end)).fetchall()
+        con.close()
+        
+        # Patrón para detectar ###A, ###B, ###C, ###D
+        hint_pattern = re.compile(r'###([A-Da-d])', re.IGNORECASE)
+        
+        for mid, snippet, raw_json in results:
+            if mid == message_id:  # Skip la encuesta misma
+                continue
+                
+            # Buscar en snippet primero
+            text_to_search = snippet or ""
+            
+            # Si no hay snippet, buscar en el raw_json
+            if not text_to_search and raw_json:
+                try:
+                    data = json.loads(raw_json)
+                    text_to_search = data.get("text", "") or data.get("caption", "")
+                except:
+                    pass
+            
+            if text_to_search:
+                match = hint_pattern.search(text_to_search)
+                if match:
+                    letter = match.group(1).upper()
+                    option_index = ord(letter) - ord('A')  # A=0, B=1, C=2, D=3
+                    
+                    logger.info(f"🔍 MÉTODO 2: Encontrado hint ###({letter}) = opción {option_index} en mensaje {mid}")
+                    
+                    # Guardar para eliminación posterior
+                    CORRECT_ANSWERS_CACHE[message_id] = option_index
+                    # Marcar el mensaje hint para eliminación
+                    _mark_hint_message_for_deletion(mid)
+                    
+                    return option_index
+    
+    except Exception as e:
+        logger.error(f"Error buscando hint de respuesta: {e}")
+    
+    return None
+
+def _mark_hint_message_for_deletion(hint_message_id: int):
+    """
+    Marca un mensaje hint (###X) para ser eliminado del canal borrador.
+    Lo agregamos a una lista especial para eliminación.
+    """
+    try:
+        import sqlite3
+        # Marcar como deleted para que no se publique
+        con = sqlite3.connect(DB_FILE)
+        cur = con.cursor()
+        cur.execute("UPDATE drafts SET deleted=1 WHERE message_id=?", (hint_message_id,))
+        con.commit()
+        con.close()
+        
+        logger.info(f"📝 Mensaje hint {hint_message_id} marcado para no publicar")
+    except Exception as e:
+        logger.error(f"Error marcando mensaje hint para eliminación: {e}")
+
+def _detect_correct_answer_for_quiz(message_id: int, poll_data: dict) -> int:
+    """
+    Función principal que intenta ambos métodos para detectar la respuesta correcta.
+    
+    MÉTODO 1: Detectar el voto del usuario en la encuesta
+    MÉTODO 2: Buscar mensajes con patrón ###X cerca de la encuesta
+    """
+    
+    # Verificar cache primero
+    if message_id in CORRECT_ANSWERS_CACHE:
+        cached_answer = CORRECT_ANSWERS_CACHE[message_id]
+        logger.info(f"📂 Usando respuesta correcta cacheada para {message_id}: {cached_answer}")
+        return cached_answer
+    
+    # MÉTODO 1: Detectar voto del usuario
+    user_vote = _detect_user_vote_from_poll(poll_data)
+    if user_vote is not None:
+        CORRECT_ANSWERS_CACHE[message_id] = user_vote
+        return user_vote
+    
+    # MÉTODO 2: Buscar hint ###X
+    hint_answer = _parse_answer_hint_from_db(message_id)
+    if hint_answer is not None:
+        return hint_answer
+    
+    # FALLBACK: Si no se detecta nada, usar 0 (A)
+    logger.warning(f"⚠️ No se pudo detectar respuesta correcta para quiz {message_id}, usando A (0)")
+    return 0
+
+# ========= Encuestas - SOLUCIÓN CON DETECCIÓN INTELIGENTE =========
+def _poll_payload_from_raw(raw: dict, message_id: int = None):
+    """
+    Extrae los parámetros de la encuesta del JSON raw.
+    Para quiz, usa detección inteligente de la respuesta correcta.
+    """
     p = raw.get("poll") or {}
     question = p.get("question", "Pregunta")
     options_src = p.get("options", []) or []
@@ -96,26 +248,29 @@ def _poll_payload_from_raw(raw: dict):
 
     if not is_quiz:
         kwargs["allows_multiple_answers"] = bool(allows_multiple)
-
-    if is_quiz:
+    else:
         kwargs["type"] = "quiz"
-        # CRÍTICO: Respetar la posición original de la respuesta correcta
-        cid = p.get("correct_option_id")
-        if cid is not None:
-            try:
-                cid = int(cid)
-                # Validar que esté dentro del rango válido
-                if 0 <= cid < len(options):
-                    kwargs["correct_option_id"] = cid
-                    logger.info(f"Quiz: respuesta correcta en posición {cid} (opción {chr(65+cid)})")
-                else:
-                    logger.warning(f"correct_option_id fuera de rango: {cid}, opciones disponibles: {len(options)}")
-                    kwargs["correct_option_id"] = 0  # fallback
-            except (ValueError, TypeError):
-                logger.warning(f"correct_option_id inválido: {cid}, usando 0 como fallback")
-                kwargs["correct_option_id"] = 0
+        
+        # DETECCIÓN INTELIGENTE DE LA RESPUESTA CORRECTA
+        if message_id:
+            correct_option_id = _detect_correct_answer_for_quiz(message_id, p)
         else:
-            logger.warning("Quiz sin correct_option_id, usando 0 como fallback")
+            # Fallback si no tenemos message_id
+            correct_option_id = p.get("correct_option_id", 0)
+            if correct_option_id is None:
+                correct_option_id = 0
+        
+        # Validar rango
+        try:
+            correct_option_id = int(correct_option_id)
+            if 0 <= correct_option_id < len(options):
+                kwargs["correct_option_id"] = correct_option_id
+                logger.info(f"✅ Quiz {message_id}: respuesta correcta en posición {correct_option_id} (opción {chr(65+correct_option_id)})")
+            else:
+                logger.warning(f"Respuesta fuera de rango: {correct_option_id}, opciones: {len(options)}")
+                kwargs["correct_option_id"] = 0
+        except (ValueError, TypeError):
+            logger.warning(f"Respuesta inválida: {correct_option_id}")
             kwargs["correct_option_id"] = 0
 
     # Manejo de tiempo de la encuesta
@@ -147,23 +302,29 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
     for mid, _t, raw in rows:
         try:
             data = json.loads(raw or "{}")
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error parseando JSON para mensaje {mid}: {e}")
             data = {}
 
         any_success = False
         for dest in targets:
             if "poll" in data:
-                base_kwargs, is_quiz = _poll_payload_from_raw(data)
-                kwargs = dict(base_kwargs)
-                kwargs["chat_id"] = dest
-                
-                # Log para debugging
-                if is_quiz:
-                    cid = kwargs.get("correct_option_id", 0)
-                    logger.info(f"Enviando quiz a {dest}: respuesta correcta en posición {cid}")
-                
-                coro_factory = lambda k=kwargs: context.bot.send_poll(**k)
-                ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
+                try:
+                    # ¡CLAVE! Pasar el message_id para detección inteligente
+                    base_kwargs, is_quiz = _poll_payload_from_raw(data, message_id=mid)
+                    kwargs = dict(base_kwargs)
+                    kwargs["chat_id"] = dest
+                    
+                    if is_quiz:
+                        cid = kwargs.get("correct_option_id", 0)
+                        logger.info(f"📊 Enviando quiz {mid} a {dest}: respuesta correcta en {chr(65+cid)} (posición {cid})")
+                    
+                    coro_factory = lambda k=kwargs: context.bot.send_poll(**k)
+                    ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
+                    
+                except Exception as e:
+                    logger.error(f"Error procesando poll {mid}: {e}")
+                    ok, msg = False, None
             else:
                 coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
                     chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
