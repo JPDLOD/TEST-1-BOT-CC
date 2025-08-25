@@ -104,16 +104,20 @@ def _poll_payload_from_raw(raw: dict):
             cid = int(cid) if cid is not None else None
         except Exception:
             cid = None
-        # IMPORTANTE: Respetar el correct_option_id original
-        if cid is not None and 0 <= cid < len(options):
-            kwargs["correct_option_id"] = cid
-            logger.info(f"Quiz con opcion correcta original: {cid} (opcion {chr(65 + cid)})")
-        elif cid is not None:
-            # Si esta fuera de rango, usar 0 como fallback
-            logger.warning(f"correct_option_id fuera de rango: {cid} para {len(options)} opciones, usando 0")
-            kwargs["correct_option_id"] = 0
+        
+        # CORRECCION IMPORTANTE: Respetar el correct_option_id original
+        if cid is not None:
+            if 0 <= cid < len(options):
+                # Usar el ID original tal cual
+                kwargs["correct_option_id"] = cid
+                logger.info(f"Quiz enviado con opcion correcta: {cid} (opcion {chr(65 + cid)})")
+            else:
+                # Si esta fuera de rango, loguear pero usar 0 como fallback
+                logger.warning(f"correct_option_id fuera de rango: {cid} para {len(options)} opciones, usando 0")
+                kwargs["correct_option_id"] = 0
         else:
-            # Si no hay correct_option_id, usar 0
+            # Si no hay correct_option_id, usar 0 por defecto
+            logger.warning("Quiz sin correct_option_id definido, usando 0")
             kwargs["correct_option_id"] = 0
 
     if p.get("open_period") is not None and p.get("close_date") is None:
