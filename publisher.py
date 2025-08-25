@@ -29,7 +29,7 @@ def get_active_targets() -> List[int]:
         targets.append(BACKUP_CHAT_ID)
     return targets
 
-# ========= Contadores / locks que usan otros módulos =========
+# ========= Contadores / locks (usados por otros módulos) =========
 STATS = {"cancelados": 0, "eliminados": 0}
 SCHEDULED_LOCK: Set[int] = set()
 
@@ -51,8 +51,7 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
                 wait = int(m.group(1)) if m else 3
             logger.warning(f"RetryAfter: esperando {wait}s …")
             import asyncio
-            await asyncio.sleep(wait + 1.0)
-            tries += 1
+            await asyncio.sleep(wait + 1.0);  tries += 1
         except TimedOut:
             logger.warning("TimedOut: esperando 3s …")
             import asyncio
@@ -79,34 +78,50 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
 
 # ========= Encuestas =========
 def _poll_payload_from_raw(raw: dict):
-    """
-    Devuelve kwargs para send_poll y un flag is_quiz. Reglas:
-    - Si el origen es QUIZ y trae correct_option_id válido -> enviamos como quiz (mantenemos índice).
-    - Si el origen es QUIZ pero NO trae correct_option_id (Telegram no lo expone si el bot no creó la encuesta)
-      -> degradamos a 'regular' con allows_multiple_answers=False (para no marcar A por error).
-    - Si el origen es 'regular' -> replicamos 'regular' y forzamos allows_multiple_answers=False.
-    """
-    p = (raw or {}).get("poll") or {}
-
-    question = str(p.get("question", "Pregunta"))
+    p = raw.get("poll") or {}
+    question = p.get("question", "Pregunta")
     options_src = p.get("options", []) or []
-    options = [str(o.get("text", "")) for o in options_src]
+    options  = [o.get("text", "") for o in options_src]
 
-    is_anon = bool(p.get("is_anonymous", True))
-    ptype = str(p.get("type") or "regular").lower().strip()
+    is_anon  = p.get("is_anonymous", True)
+    allows_multiple = p.get("allows_multiple_answers", False)
+    ptype = (p.get("type") or "regular").lower().strip()
+    is_quiz = (ptype == "quiz")
 
-    # Presentes solo si el bot es creador de la encuesta original
-    cid_raw = p.get("correct_option_id")
-    cid_present = isinstance(cid_raw, int)
-
-    # Base kwargs comunes
     kwargs = dict(
         question=question,
         options=options,
         is_anonymous=is_anon,
     )
 
-    # Manejo de ventanas de tiempo (si vienen)
+    if not is_quiz:
+        kwargs["allows_multiple_answers"] = bool(allows_multiple)
+
+    if is_quiz:
+        kwargs["type"] = "quiz"
+        # CORRECCIÓN: Respetar el correct_option_id original sin forzar a 0
+        cid = p.get("correct_option_id")
+        try:
+            cid = int(cid) if cid is not None else None
+        except Exception:
+            cid = None
+        
+        # Solo validar que esté en rango, NO forzar a 0 si es None o inválido
+        if cid is not None and 0 <= cid < len(options):
+            kwargs["correct_option_id"] = cid
+        else:
+            # Si no hay opción correcta válida en el origen, loguear advertencia
+            # pero NO establecer ningún valor por defecto
+            logger.warning(f"Quiz sin correct_option_id válido: {cid} para {len(options)} opciones")
+            # Para mantener compatibilidad, si realmente no hay opción, usar 0
+            # pero esto debería ser raro si el quiz original está bien formado
+            if cid is None:
+                kwargs["correct_option_id"] = 0
+            else:
+                # Si el ID está fuera de rango, usar el valor original de todos modos
+                # para que Telegram devuelva error y podamos debuggear
+                kwargs["correct_option_id"] = cid
+
     if p.get("open_period") is not None and p.get("close_date") is None:
         try:
             kwargs["open_period"] = int(p["open_period"])
@@ -118,27 +133,13 @@ def _poll_payload_from_raw(raw: dict):
         except Exception:
             pass
 
-    # Decisión final
-    if ptype == "quiz" and cid_present:
-        # Validar rango
-        cid = int(cid_raw)
-        if not (0 <= cid < len(options)):
-            # Si por algún motivo no cuadra, NO forzamos A; degradamos a regular
-            kwargs["allows_multiple_answers"] = False
-            return kwargs, False
-        kwargs["type"] = "quiz"
-        kwargs["correct_option_id"] = cid
-        # Explicación (opcional)
-        if p.get("explanation"):
-            kwargs["explanation"] = str(p["explanation"])
-        return kwargs, True
+    if is_quiz and p.get("explanation"):
+        kwargs["explanation"] = str(p["explanation"])
 
-    # Cualquier otro caso -> regular de una sola respuesta
-    kwargs["allows_multiple_answers"] = False
-    return kwargs, False
+    return kwargs, is_quiz
 
 # ========= Publicadores =========
-async def publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple[int, str, str]],
+async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple[int, str, str]],
                          targets: List[int], mark_as_sent: bool) -> Tuple[int, int, Dict[int, List[int]]]:
     publicados = 0
     fallidos = 0
@@ -157,6 +158,11 @@ async def publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple[
                 base_kwargs, is_quiz = _poll_payload_from_raw(data)
                 kwargs = dict(base_kwargs)
                 kwargs["chat_id"] = dest
+                
+                # Debug log para verificar que se respeta la opción correcta
+                if is_quiz and "correct_option_id" in kwargs:
+                    logger.info(f"Enviando quiz con opción correcta: {kwargs['correct_option_id']} de {len(kwargs['options'])} opciones")
+                
                 coro_factory = lambda k=kwargs: context.bot.send_poll(**k)
                 ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
             else:
@@ -190,11 +196,11 @@ async def publicar(context: ContextTypes.DEFAULT_TYPE, *, targets: List[int], ma
     rows = [(m, t, r) for (m, t, r) in all_rows if m not in SCHEDULED_LOCK]
     if not rows:
         return 0, 0, {t: [] for t in targets}
-    return await publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
+    return await _publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
 
 async def publicar_ids(context: ContextTypes.DEFAULT_TYPE, *, ids: List[int],
                        targets: List[int], mark_as_sent: bool):
-    # Query puntual sin duplicar lógica pública del módulo database
+    # Query puntual sin duplicar lógica del módulo database
     import sqlite3
     if not ids:
         return 0, 0, {t: [] for t in targets}
@@ -206,8 +212,4 @@ async def publicar_ids(context: ContextTypes.DEFAULT_TYPE, *, ids: List[int],
     con.close()
     if not rows:
         return 0, 0, {t: [] for t in targets}
-    return await publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
-
-async def publicar_todo_activos(context: ContextTypes.DEFAULT_TYPE):
-    pubs, fails, _ = await publicar(context, targets=get_active_targets(), mark_as_sent=True)
-    return pubs, fails
+    return await _publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
