@@ -29,11 +29,11 @@ def get_active_targets() -> List[int]:
         targets.append(BACKUP_CHAT_ID)
     return targets
 
-# ========= Contadores / locks (usados por otros modulos) =========
+# ========= Contadores / locks (usados por otros módulos) =========
 STATS = {"cancelados": 0, "eliminados": 0}
 SCHEDULED_LOCK: Set[int] = set()
 
-# ========= Backoff para envios =========
+# ========= Backoff para envíos =========
 async def _send_with_backoff(func_coro_factory, *, base_pause: float):
     tries = 0
     while True:
@@ -49,20 +49,20 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
                 import re
                 m = re.search(r"Retry in (\d+)", str(e))
                 wait = int(m.group(1)) if m else 3
-            logger.warning(f"RetryAfter: esperando {wait}s ...")
+            logger.warning(f"RetryAfter: esperando {wait}s …")
             import asyncio
             await asyncio.sleep(wait + 1.0);  tries += 1
         except TimedOut:
-            logger.warning("TimedOut: esperando 3s ...")
+            logger.warning("TimedOut: esperando 3s …")
             import asyncio
             await asyncio.sleep(3.0);  tries += 1
         except NetworkError:
-            logger.warning("NetworkError: esperando 3s ...")
+            logger.warning("NetworkError: esperando 3s …")
             import asyncio
             await asyncio.sleep(3.0);  tries += 1
         except TelegramError as e:
             if "Flood control exceeded" in str(e):
-                logger.warning("Flood control... esperando 5s ...")
+                logger.warning("Flood control… esperando 5s …")
                 import asyncio
                 await asyncio.sleep(5.0);  tries += 1
             else:
@@ -76,14 +76,14 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
             logger.error("Demasiados reintentos; abandono este mensaje.")
             return False, None
 
-# ========= Encuestas =========
+# ========= Encuestas - CORREGIDO =========
 def _poll_payload_from_raw(raw: dict):
     p = raw.get("poll") or {}
     question = p.get("question", "Pregunta")
     options_src = p.get("options", []) or []
-    options  = [o.get("text", "") for o in options_src]
+    options = [o.get("text", "") for o in options_src]
 
-    is_anon  = p.get("is_anonymous", True)
+    is_anon = p.get("is_anonymous", True)
     allows_multiple = p.get("allows_multiple_answers", False)
     ptype = (p.get("type") or "regular").lower().strip()
     is_quiz = (ptype == "quiz")
@@ -99,27 +99,26 @@ def _poll_payload_from_raw(raw: dict):
 
     if is_quiz:
         kwargs["type"] = "quiz"
+        # CRÍTICO: Respetar la posición original de la respuesta correcta
         cid = p.get("correct_option_id")
-        try:
-            cid = int(cid) if cid is not None else None
-        except Exception:
-            cid = None
-        
-        # CORRECCION IMPORTANTE: Respetar el correct_option_id original
         if cid is not None:
-            if 0 <= cid < len(options):
-                # Usar el ID original tal cual
-                kwargs["correct_option_id"] = cid
-                logger.info(f"Quiz enviado con opcion correcta: {cid} (opcion {chr(65 + cid)})")
-            else:
-                # Si esta fuera de rango, loguear pero usar 0 como fallback
-                logger.warning(f"correct_option_id fuera de rango: {cid} para {len(options)} opciones, usando 0")
+            try:
+                cid = int(cid)
+                # Validar que esté dentro del rango válido
+                if 0 <= cid < len(options):
+                    kwargs["correct_option_id"] = cid
+                    logger.info(f"Quiz: respuesta correcta en posición {cid} (opción {chr(65+cid)})")
+                else:
+                    logger.warning(f"correct_option_id fuera de rango: {cid}, opciones disponibles: {len(options)}")
+                    kwargs["correct_option_id"] = 0  # fallback
+            except (ValueError, TypeError):
+                logger.warning(f"correct_option_id inválido: {cid}, usando 0 como fallback")
                 kwargs["correct_option_id"] = 0
         else:
-            # Si no hay correct_option_id, usar 0 por defecto
-            logger.warning("Quiz sin correct_option_id definido, usando 0")
+            logger.warning("Quiz sin correct_option_id, usando 0 como fallback")
             kwargs["correct_option_id"] = 0
 
+    # Manejo de tiempo de la encuesta
     if p.get("open_period") is not None and p.get("close_date") is None:
         try:
             kwargs["open_period"] = int(p["open_period"])
@@ -131,6 +130,7 @@ def _poll_payload_from_raw(raw: dict):
         except Exception:
             pass
 
+    # Explicación para quiz
     if is_quiz and p.get("explanation"):
         kwargs["explanation"] = str(p["explanation"])
 
@@ -153,9 +153,15 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
         any_success = False
         for dest in targets:
             if "poll" in data:
-                base_kwargs, _ = _poll_payload_from_raw(data)
+                base_kwargs, is_quiz = _poll_payload_from_raw(data)
                 kwargs = dict(base_kwargs)
                 kwargs["chat_id"] = dest
+                
+                # Log para debugging
+                if is_quiz:
+                    cid = kwargs.get("correct_option_id", 0)
+                    logger.info(f"Enviando quiz a {dest}: respuesta correcta en posición {cid}")
+                
                 coro_factory = lambda k=kwargs: context.bot.send_poll(**k)
                 ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
             else:
@@ -182,7 +188,7 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
     return publicados, fallidos, posted_by_target
 
 async def publicar(context: ContextTypes.DEFAULT_TYPE, *, targets: List[int], mark_as_sent: bool):
-    """Envia la cola completa EXCLUYENDO los bloqueados (SCHEDULED_LOCK)."""
+    """Envía la cola completa EXCLUYENDO los bloqueados (SCHEDULED_LOCK)."""
     all_rows = get_unsent_drafts(DB_FILE)  # [(message_id, text, raw_json)]
     if not all_rows:
         return 0, 0, {t: [] for t in targets}
@@ -193,7 +199,7 @@ async def publicar(context: ContextTypes.DEFAULT_TYPE, *, targets: List[int], ma
 
 async def publicar_ids(context: ContextTypes.DEFAULT_TYPE, *, ids: List[int],
                        targets: List[int], mark_as_sent: bool):
-    # Query puntual sin duplicar logica del modulo database
+    # Query puntual sin duplicar lógica del módulo database
     import sqlite3
     if not ids:
         return 0, 0, {t: [] for t in targets}
