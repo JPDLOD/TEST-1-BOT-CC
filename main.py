@@ -399,4 +399,3 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 rid = update.channel_post.reply_to_message.message_id
                 await context.bot.send_message(SOURCE_CHAT_ID, f"🆔 ID del mensaje: {rid}")
             else:
-                mid = extract_
