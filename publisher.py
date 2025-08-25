@@ -33,8 +33,9 @@ def get_active_targets() -> List[int]:
 STATS = {"cancelados": 0, "eliminados": 0}
 SCHEDULED_LOCK: Set[int] = set()
 
-# ========= Cache para respuestas correctas detectadas =========
-CORRECT_ANSWERS_CACHE: Dict[int, int] = {}  # {message_id: correct_option_index}
+# ========= Cache para respuestas correctas =========
+CORRECT_ANSWERS_CACHE: Dict[int, int] = {}
+HINT_MESSAGES_TO_DELETE: Set[int] = set()
 
 # ========= Backoff para envíos =========
 async def _send_with_backoff(func_coro_factory, *, base_pause: float):
@@ -79,43 +80,79 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
             logger.error("Demasiados reintentos; abandono este mensaje.")
             return False, None
 
-# ========= Funciones para detectar la respuesta correcta =========
+# ========= DETECCIÓN MEJORADA DE RESPUESTA CORRECTA =========
 
-def _detect_user_vote_from_poll(poll_data: dict) -> Optional[int]:
+def _detect_chosen_option_from_poll(poll_data: dict) -> Optional[int]:
     """
-    MÉTODO 1: Detecta cuál opción votó el usuario (tú) en la encuesta.
-    Busca en los resultados de la poll cuál opción tiene voter_count > 0
-    y fue votada por el creador.
+    MÉTODO MEJORADO: Detecta la opción que el usuario eligió analizando
+    múltiples campos del poll JSON que podrían contener esta información.
     """
     try:
-        # Si hay resultados de votos
-        if "results" in poll_data:
-            results = poll_data["results"]
-            if "results" in results:
-                result_list = results["results"]
-                
-                # Buscar la opción con votos (asumiendo que solo tú votaste)
-                for i, option_result in enumerate(result_list):
-                    if option_result and option_result.get("voter_count", 0) > 0:
-                        logger.info(f"🗳️ MÉTODO 1: Detectado voto del usuario en opción {i} (letra {chr(65+i)})")
-                        return i
-                        
-        # También revisar en la estructura de opciones directamente
+        # Método 1: Revisar options directamente por voter_count
         options = poll_data.get("options", [])
         for i, option in enumerate(options):
-            if option and option.get("voter_count", 0) > 0:
-                logger.info(f"🗳️ MÉTODO 1: Detectado voto en opción {i} via options (letra {chr(65+i)})")
-                return i
-                
+            if isinstance(option, dict):
+                voter_count = option.get("voter_count", 0)
+                if voter_count > 0:
+                    logger.info(f"🗳️ MÉTODO 1: Detectada opción votada en posición {i} (letra {chr(65+i)}) - voter_count: {voter_count}")
+                    return i
+        
+        # Método 2: Revisar poll results si existen
+        if "results" in poll_data:
+            results = poll_data["results"]
+            if isinstance(results, dict):
+                results_list = results.get("results", [])
+                for i, result in enumerate(results_list):
+                    if isinstance(result, dict):
+                        # Buscar indicadores de voto
+                        if result.get("chosen", False) or result.get("voter_count", 0) > 0:
+                            logger.info(f"🗳️ MÉTODO 2: Detectada opción votada en results posición {i} (letra {chr(65+i)})")
+                            return i
+        
+        # Método 3: Revisar si hay información en poll_results
+        if "poll_results" in poll_data:
+            poll_results = poll_data["poll_results"]
+            if isinstance(poll_results, dict):
+                results_list = poll_results.get("results", [])
+                for i, result in enumerate(results_list):
+                    if isinstance(result, dict) and result.get("voter_count", 0) > 0:
+                        logger.info(f"🗳️ MÉTODO 3: Detectada opción votada en poll_results posición {i} (letra {chr(65+i)})")
+                        return i
+        
+        # Método 4: Buscar en cualquier estructura anidada que contenga voter_count > 0
+        def _recursive_search_voter_count(obj, path=""):
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    current_path = f"{path}.{key}" if path else key
+                    if key == "voter_count" and isinstance(value, int) and value > 0:
+                        logger.info(f"🗳️ MÉTODO 4: Encontrado voter_count > 0 en {current_path}")
+                        return True
+                    result = _recursive_search_voter_count(value, current_path)
+                    if result:
+                        return result
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    current_path = f"{path}[{i}]"
+                    result = _recursive_search_voter_count(item, current_path)
+                    if result:
+                        return result
+            return False
+        
+        if _recursive_search_voter_count(poll_data):
+            logger.info("🗳️ MÉTODO 4: Se encontró evidencia de voto en estructura anidada")
+            # Intentar extraer la posición si es posible
+            pass
+            
     except Exception as e:
         logger.error(f"Error detectando voto del usuario: {e}")
+        # Log del JSON completo para debugging
+        logger.debug(f"Poll data para debugging: {json.dumps(poll_data, indent=2, default=str)}")
     
     return None
 
 def _parse_answer_hint_from_db(message_id: int) -> Optional[int]:
     """
-    MÉTODO 2: Busca mensajes con patrón ###X cerca del message_id de la encuesta.
-    Busca en la base de datos mensajes anteriores o posteriores con el patrón.
+    MÉTODO ###X: Busca mensajes con patrón ###X cerca del message_id de la encuesta.
     """
     try:
         import sqlite3
@@ -124,7 +161,7 @@ def _parse_answer_hint_from_db(message_id: int) -> Optional[int]:
         con = sqlite3.connect(DB_FILE)
         cur = con.cursor()
         
-        # Buscar mensajes cerca del message_id actual (±5 mensajes)
+        # Buscar mensajes cerca del message_id actual (±10 mensajes para mayor alcance)
         query = """
         SELECT message_id, snippet, raw_json 
         FROM drafts 
@@ -133,14 +170,14 @@ def _parse_answer_hint_from_db(message_id: int) -> Optional[int]:
         ORDER BY message_id ASC
         """
         
-        range_start = message_id - 5
-        range_end = message_id + 5
+        range_start = message_id - 10
+        range_end = message_id + 10
         
         results = cur.execute(query, (range_start, range_end)).fetchall()
         con.close()
         
-        # Patrón para detectar ###A, ###B, ###C, ###D
-        hint_pattern = re.compile(r'###([A-Da-d])', re.IGNORECASE)
+        # Patrón mejorado para detectar ###A, ###B, ###C, ###D (también espacios)
+        hint_pattern = re.compile(r'###\s*([A-Da-d])', re.IGNORECASE)
         
         for mid, snippet, raw_json in results:
             if mid == message_id:  # Skip la encuesta misma
@@ -163,12 +200,10 @@ def _parse_answer_hint_from_db(message_id: int) -> Optional[int]:
                     letter = match.group(1).upper()
                     option_index = ord(letter) - ord('A')  # A=0, B=1, C=2, D=3
                     
-                    logger.info(f"🔍 MÉTODO 2: Encontrado hint ###({letter}) = opción {option_index} en mensaje {mid}")
+                    logger.info(f"🔍 MÉTODO ###X: Encontrado hint '###({letter})' = opción {option_index} en mensaje {mid}")
                     
-                    # Guardar para eliminación posterior
-                    CORRECT_ANSWERS_CACHE[message_id] = option_index
-                    # Marcar el mensaje hint para eliminación
-                    _mark_hint_message_for_deletion(mid)
+                    # Marcar mensaje hint para eliminación
+                    HINT_MESSAGES_TO_DELETE.add(mid)
                     
                     return option_index
     
@@ -177,58 +212,88 @@ def _parse_answer_hint_from_db(message_id: int) -> Optional[int]:
     
     return None
 
-def _mark_hint_message_for_deletion(hint_message_id: int):
+def _detect_correct_answer_comprehensive(message_id: int, poll_data: dict) -> int:
     """
-    Marca un mensaje hint (###X) para ser eliminado del canal borrador.
-    Lo agregamos a una lista especial para eliminación.
-    """
-    try:
-        import sqlite3
-        # Marcar como deleted para que no se publique
-        con = sqlite3.connect(DB_FILE)
-        cur = con.cursor()
-        cur.execute("UPDATE drafts SET deleted=1 WHERE message_id=?", (hint_message_id,))
-        con.commit()
-        con.close()
-        
-        logger.info(f"📝 Mensaje hint {hint_message_id} marcado para no publicar")
-    except Exception as e:
-        logger.error(f"Error marcando mensaje hint para eliminación: {e}")
-
-def _detect_correct_answer_for_quiz(message_id: int, poll_data: dict) -> int:
-    """
-    Función principal que intenta ambos métodos para detectar la respuesta correcta.
-    
-    MÉTODO 1: Detectar el voto del usuario en la encuesta
-    MÉTODO 2: Buscar mensajes con patrón ###X cerca de la encuesta
+    FUNCIÓN PRINCIPAL: Intenta TODOS los métodos disponibles para detectar la respuesta correcta.
     """
     
-    # Verificar cache primero
+    # Cache check
     if message_id in CORRECT_ANSWERS_CACHE:
         cached_answer = CORRECT_ANSWERS_CACHE[message_id]
-        logger.info(f"📂 Usando respuesta correcta cacheada para {message_id}: {cached_answer}")
+        logger.info(f"📂 Quiz {message_id}: usando respuesta cacheada {chr(65+cached_answer)} (pos {cached_answer})")
         return cached_answer
     
+    # Log del poll data para debugging
+    logger.debug(f"🔍 Analizando poll {message_id}:")
+    logger.debug(f"Poll keys: {list(poll_data.keys()) if isinstance(poll_data, dict) else 'No es dict'}")
+    
     # MÉTODO 1: Detectar voto del usuario
-    user_vote = _detect_user_vote_from_poll(poll_data)
+    user_vote = _detect_chosen_option_from_poll(poll_data)
     if user_vote is not None:
+        logger.info(f"✅ MÉTODO VOTO: Detectada respuesta correcta {chr(65+user_vote)} para quiz {message_id}")
         CORRECT_ANSWERS_CACHE[message_id] = user_vote
         return user_vote
     
     # MÉTODO 2: Buscar hint ###X
     hint_answer = _parse_answer_hint_from_db(message_id)
     if hint_answer is not None:
+        logger.info(f"✅ MÉTODO HINT: Detectada respuesta correcta {chr(65+hint_answer)} para quiz {message_id}")
+        CORRECT_ANSWERS_CACHE[message_id] = hint_answer
         return hint_answer
     
-    # FALLBACK: Si no se detecta nada, usar 0 (A)
-    logger.warning(f"⚠️ No se pudo detectar respuesta correcta para quiz {message_id}, usando A (0)")
+    # MÉTODO 3: Revisar si existe correct_option_id (por si acaso)
+    direct_correct = poll_data.get("correct_option_id")
+    if direct_correct is not None:
+        try:
+            direct_correct = int(direct_correct)
+            options_count = len(poll_data.get("options", []))
+            if 0 <= direct_correct < options_count:
+                logger.info(f"✅ MÉTODO DIRECTO: Encontrado correct_option_id {chr(65+direct_correct)} para quiz {message_id}")
+                CORRECT_ANSWERS_CACHE[message_id] = direct_correct
+                return direct_correct
+        except (ValueError, TypeError):
+            pass
+    
+    # FALLBACK: Si ningún método funciona
+    logger.warning(f"⚠️ NINGÚN MÉTODO funcionó para quiz {message_id}")
+    logger.warning(f"📄 Poll data disponible: {json.dumps(poll_data, indent=2, default=str)[:500]}...")
+    
+    # Usar fallback A (0) pero sugerir el método ###X
+    logger.warning(f"💡 SUGERENCIA: Usa un mensaje '###C' cerca de la encuesta si C es la respuesta correcta")
     return 0
 
-# ========= Encuestas - SOLUCIÓN CON DETECCIÓN INTELIGENTE =========
+async def _delete_hint_messages(context: ContextTypes.DEFAULT_TYPE):
+    """Elimina mensajes hint del canal BORRADOR."""
+    deleted_count = 0
+    
+    for hint_mid in list(HINT_MESSAGES_TO_DELETE):
+        try:
+            await context.bot.delete_message(chat_id=SOURCE_CHAT_ID, message_id=hint_mid)
+            logger.info(f"🗑️ Eliminado mensaje hint {hint_mid} del canal")
+            deleted_count += 1
+        except Exception as e:
+            logger.warning(f"No pude eliminar hint {hint_mid}: {e}")
+        
+        # Marcar como deleted en DB
+        try:
+            import sqlite3
+            con = sqlite3.connect(DB_FILE)
+            cur = con.cursor()
+            cur.execute("UPDATE drafts SET deleted=1 WHERE message_id=?", (hint_mid,))
+            con.commit()
+            con.close()
+        except:
+            pass
+    
+    HINT_MESSAGES_TO_DELETE.clear()
+    
+    if deleted_count > 0:
+        logger.info(f"✅ Eliminados {deleted_count} mensajes hint")
+
+# ========= Encuestas - VERSIÓN FINAL =========
 def _poll_payload_from_raw(raw: dict, message_id: int = None):
     """
-    Extrae los parámetros de la encuesta del JSON raw.
-    Para quiz, usa detección inteligente de la respuesta correcta.
+    Extrae parámetros de la encuesta con detección inteligente de respuesta correcta.
     """
     p = raw.get("poll") or {}
     question = p.get("question", "Pregunta")
@@ -251,29 +316,18 @@ def _poll_payload_from_raw(raw: dict, message_id: int = None):
     else:
         kwargs["type"] = "quiz"
         
-        # DETECCIÓN INTELIGENTE DE LA RESPUESTA CORRECTA
+        # DETECCIÓN INTEGRAL DE RESPUESTA CORRECTA
         if message_id:
-            correct_option_id = _detect_correct_answer_for_quiz(message_id, p)
+            correct_option_id = _detect_correct_answer_comprehensive(message_id, p)
         else:
-            # Fallback si no tenemos message_id
-            correct_option_id = p.get("correct_option_id", 0)
-            if correct_option_id is None:
-                correct_option_id = 0
+            correct_option_id = 0
         
-        # Validar rango
-        try:
-            correct_option_id = int(correct_option_id)
-            if 0 <= correct_option_id < len(options):
-                kwargs["correct_option_id"] = correct_option_id
-                logger.info(f"✅ Quiz {message_id}: respuesta correcta en posición {correct_option_id} (opción {chr(65+correct_option_id)})")
-            else:
-                logger.warning(f"Respuesta fuera de rango: {correct_option_id}, opciones: {len(options)}")
-                kwargs["correct_option_id"] = 0
-        except (ValueError, TypeError):
-            logger.warning(f"Respuesta inválida: {correct_option_id}")
-            kwargs["correct_option_id"] = 0
+        # Aplicar respuesta detectada
+        kwargs["correct_option_id"] = correct_option_id
+        
+        logger.info(f"🎯 Quiz {message_id}: establecida respuesta correcta → {chr(65+correct_option_id)} (posición {correct_option_id})")
 
-    # Manejo de tiempo de la encuesta
+    # Otros parámetros de la encuesta
     if p.get("open_period") is not None and p.get("close_date") is None:
         try:
             kwargs["open_period"] = int(p["open_period"])
@@ -285,7 +339,6 @@ def _poll_payload_from_raw(raw: dict, message_id: int = None):
         except Exception:
             pass
 
-    # Explicación para quiz
     if is_quiz and p.get("explanation"):
         kwargs["explanation"] = str(p["explanation"])
 
@@ -294,12 +347,20 @@ def _poll_payload_from_raw(raw: dict, message_id: int = None):
 # ========= Publicadores =========
 async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple[int, str, str]],
                          targets: List[int], mark_as_sent: bool) -> Tuple[int, int, Dict[int, List[int]]]:
+    
+    # Eliminar mensajes hint ANTES de procesar
+    await _delete_hint_messages(context)
+    
     publicados = 0
     fallidos = 0
     enviados_ids: List[int] = []
     posted_by_target: Dict[int, List[int]] = {t: [] for t in targets}
 
     for mid, _t, raw in rows:
+        # Skip mensajes hint marcados para eliminación
+        if mid in HINT_MESSAGES_TO_DELETE:
+            continue
+            
         try:
             data = json.loads(raw or "{}")
         except Exception as e:
@@ -310,14 +371,13 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
         for dest in targets:
             if "poll" in data:
                 try:
-                    # ¡CLAVE! Pasar el message_id para detección inteligente
                     base_kwargs, is_quiz = _poll_payload_from_raw(data, message_id=mid)
                     kwargs = dict(base_kwargs)
                     kwargs["chat_id"] = dest
                     
                     if is_quiz:
                         cid = kwargs.get("correct_option_id", 0)
-                        logger.info(f"📊 Enviando quiz {mid} a {dest}: respuesta correcta en {chr(65+cid)} (posición {cid})")
+                        logger.info(f"📊 Enviando quiz {mid} a {dest}: respuesta → {chr(65+cid)} ✓")
                     
                     coro_factory = lambda k=kwargs: context.bot.send_poll(**k)
                     ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
