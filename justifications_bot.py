@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Bot separado SOLO para entregar justificaciones
+Ejecutar independiente del bot principal
 NO interfiere con el bot principal
 """
 
 import os
 import logging
 import asyncio
-import random
 from typing import Dict, List
 from datetime import datetime, timedelta
 
@@ -18,9 +18,12 @@ from telegram.error import TelegramError
 
 # ========= CONFIGURACIÓN =========
 BOT_TOKEN = "8256996324:AAH2cD9VBEK7iQrlmiwCi11zwOzAJgyg1d4"  # @JUST_CC_bot
-JUSTIFICATIONS_CHAT_ID = -1003058530208  # Canal de justificaciones
+JUSTIFICATIONS_CHAT_ID = -1003058530208  # Canal de justificaciones (cambiar a tu canal privado si quieres)
 AUTO_DELETE_MINUTES = 10  # Tiempo antes de borrar
 MAX_CONCURRENT_REQUESTS = 10  # Máximo de solicitudes concurrentes por usuario
+
+# Admins del bot (agrega tu ID aquí)
+ADMIN_IDS = [123456789]  # Reemplaza con tu ID de Telegram
 
 # ========= LOGGING =========
 logging.basicConfig(
@@ -32,29 +35,28 @@ logger = logging.getLogger(__name__)
 # ========= CACHE Y CONTROL =========
 user_sessions: Dict[int, Dict] = {}  # {user_id: {"messages": [], "task": asyncio.Task, "semaphore": asyncio.Semaphore}}
 
-# ========= MENSAJES ALEATORIOS =========
-SUCCESS_MESSAGES = [
-    "📚 ¡Justificación lista! Revisa con calma.",
-    "✨ Material de estudio enviado.",
-    "🎯 ¡Justificación disponible!",
-    "📖 Contenido académico listo para revisar.",
-    "💊 Tu dosis de conocimiento ha sido enviada.",
-    "🩺 Diagnóstico: Necesitas esta justificación. Tratamiento: Leerla.",
-    "📋 Historia clínica del caso: Completa.",
-    "🔬 Resultados del laboratorio de conocimiento listos.",
-    "💉 Inyección de sabiduría administrada con éxito.",
-    "🏥 Interconsulta con la justificación: Aprobada.",
-    "🚑 Justificación de emergencia despachada.",
-    "👨‍⚕️ El Dr. Bot te envió la justificación STAT!",
-    "🫀 Tu nodo SA está enviando impulsos de felicidad.",
-    "🧬 Mutación detectada en el gen del conocimiento: +100 IQ.",
-    "💊 Farmacocinética: Absorción inmediata.",
-    "🦠 Gram positivo para el aprendizaje.",
-    "🩸 Tu Hb subió 2 puntos solo de ver esta justificación.",
-    "🧠 Neuronas activadas exitosamente.",
-    "📚 Como el café del hospital: Necesario aunque no sea el mejor.",
-    "🎓 Un paso más cerca de la residencia.",
-]
+# ========= IMPORTAR MENSAJES DESDE EL ARCHIVO SEPARADO =========
+try:
+    from justification_messages import get_random_message, get_weighted_random_message
+    logger.info("✅ Mensajes creativos cargados desde justification_messages.py")
+except ImportError:
+    logger.warning("⚠️ No se pudo cargar justification_messages.py, usando mensajes por defecto")
+    import random
+    
+    # Mensajes fallback mínimos si no existe el archivo
+    FALLBACK_MESSAGES = [
+        "📚 ¡Justificación lista! Revisa con calma.",
+        "✨ Material de estudio enviado.",
+        "🎯 ¡Justificación disponible!",
+        "📖 Contenido académico listo para revisar.",
+        "💊 Tu dosis de conocimiento ha sido enviada.",
+    ]
+    
+    def get_random_message():
+        return random.choice(FALLBACK_MESSAGES)
+    
+    def get_weighted_random_message():
+        return random.choice(FALLBACK_MESSAGES)
 
 # ========= FUNCIONES PRINCIPALES =========
 
@@ -76,7 +78,11 @@ async def send_justification(
         if sent:
             # Agregar a la sesión del usuario
             if user_id not in user_sessions:
-                user_sessions[user_id] = {"messages": [], "task": None, "semaphore": asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)}
+                user_sessions[user_id] = {
+                    "messages": [],
+                    "task": None,
+                    "semaphore": asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+                }
             
             user_sessions[user_id]["messages"].append(sent.message_id)
             logger.info(f"✅ Justificación {justification_id} enviada a usuario {user_id}")
@@ -87,6 +93,23 @@ async def send_justification(
     
     return False
 
+async def send_multiple_justifications(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    justification_ids: List[int]
+) -> bool:
+    """Envía múltiples justificaciones."""
+    success_count = 0
+    
+    for just_id in justification_ids:
+        if await send_justification(context, user_id, just_id):
+            success_count += 1
+            # Pequeña pausa entre mensajes múltiples
+            if len(justification_ids) > 1:
+                await asyncio.sleep(0.3)
+    
+    return success_count > 0
+
 async def handle_justification_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja solicitudes de justificación con mejor concurrencia."""
     if not update.message or not update.message.text:
@@ -95,23 +118,38 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     text = update.message.text.strip()
     user_id = update.message.from_user.id
     
-    # Extraer ID de justificación
+    # Extraer IDs de justificación
+    justification_ids = []
+    
     if text.startswith("/start just_"):
         try:
-            # Extraer ID único (por ahora solo soportamos uno por solicitud)
-            id_part = text.replace("/start just_", "").split("_")[0]
-            justification_id = int(id_part)
+            # Extraer múltiples IDs formato: just_123_456_789
+            id_string = text.replace("/start just_", "")
+            for id_part in id_string.split("_"):
+                if id_part.isdigit():
+                    justification_ids.append(int(id_part))
         except:
-            await update.message.reply_text("❌ Enlace inválido.")
-            return
+            pass
+    
     elif text.startswith("/just"):
-        # Comando directo /just 123
+        # Comando directo /just 123 o /just 123,456,789
         try:
-            justification_id = int(text.split()[1])
+            args = text.replace("/just", "").strip()
+            if "," in args:
+                # Múltiples IDs separados por comas
+                for id_str in args.split(","):
+                    if id_str.strip().isdigit():
+                        justification_ids.append(int(id_str.strip()))
+            else:
+                # Un solo ID
+                justification_ids.append(int(args))
         except:
-            await update.message.reply_text("❌ Usa: /just <número>")
-            return
+            pass
     else:
+        return
+    
+    if not justification_ids:
+        await update.message.reply_text("❌ Formato inválido. Usa: /just <número> o /just <num1,num2,num3>")
         return
     
     # Crear semáforo para el usuario si no existe
@@ -126,20 +164,31 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     
     # Usar semáforo para controlar concurrencia
     async with user_session["semaphore"]:
+        # Limpiar mensajes previos si hay
+        await clean_previous_messages(context, user_id)
+        
         # Enviar mensaje de procesando
-        processing = await update.message.reply_text("🔄 Obteniendo justificación...")
+        if len(justification_ids) == 1:
+            processing_text = "🔄 Obteniendo justificación..."
+        else:
+            processing_text = f"🔄 Obteniendo {len(justification_ids)} justificaciones..."
+        
+        processing = await update.message.reply_text(processing_text)
         
         try:
-            # Enviar justificación
-            success = await send_justification(context, user_id, justification_id)
+            # Enviar justificaciones
+            success = await send_multiple_justifications(context, user_id, justification_ids)
             
             # Borrar mensaje de procesando
-            await processing.delete()
+            try:
+                await processing.delete()
+            except:
+                pass
             
             if success:
-                # Enviar mensaje aleatorio de éxito
+                # Enviar mensaje aleatorio de éxito (USANDO LA FUNCIÓN IMPORTADA)
                 success_msg = await update.message.reply_text(
-                    random.choice(SUCCESS_MESSAGES),
+                    get_weighted_random_message(),  # Usar función importada con peso
                     disable_notification=True
                 )
                 
@@ -163,7 +212,28 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
                 pass
             await update.message.reply_text("❌ Error inesperado. Intenta de nuevo.")
 
-async strongly schedule_deletion(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+async def clean_previous_messages(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Limpia mensajes previos del usuario."""
+    if user_id not in user_sessions:
+        return
+    
+    user_session = user_sessions[user_id]
+    
+    # Cancelar tarea de eliminación anterior si existe
+    if user_session.get("task"):
+        user_session["task"].cancel()
+    
+    # Borrar mensajes previos
+    for msg_id in user_session.get("messages", []):
+        try:
+            await context.bot.delete_message(chat_id=user_id, message_id=msg_id)
+        except:
+            pass
+    
+    # Limpiar lista
+    user_session["messages"] = []
+
+async def schedule_deletion(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """Programa la eliminación de mensajes después del tiempo configurado."""
     if user_id not in user_sessions:
         return
@@ -179,7 +249,7 @@ async strongly schedule_deletion(context: ContextTypes.DEFAULT_TYPE, user_id: in
             await asyncio.sleep(AUTO_DELETE_MINUTES * 60)
             
             # Borrar todos los mensajes del usuario
-            for msg_id in user_session["messages"]:
+            for msg_id in user_session.get("messages", []):
                 try:
                     await context.bot.delete_message(chat_id=user_id, message_id=msg_id)
                 except:
@@ -217,6 +287,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "4. Se auto-eliminará en 10 minutos\n\n"
             "💡 *Comandos:*\n"
             "• `/just <número>` - Obtener justificación directa\n"
+            "• `/just <num1,num2,num3>` - Múltiples justificaciones\n"
             "• `/ayuda` - Ver esta información\n\n"
             "_Bot exclusivo para estudiantes de medicina_",
             parse_mode="Markdown"
@@ -231,11 +302,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, context)
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Estado del bot (admin)."""
+    """Estado del bot (solo admins)."""
     user_id = update.message.from_user.id
-    
-    # Solo para admins (puedes agregar IDs de admin aquí)
-    ADMIN_IDS = [123456789]  # Agrega tu ID aquí
     
     if user_id not in ADMIN_IDS:
         await update.message.reply_text("❌ No autorizado")
@@ -245,14 +313,58 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_messages = sum(len(s["messages"]) for s in user_sessions.values())
     
     status_text = (
-        f"📊 *Estado del Bot*\n\n"
+        f"📊 *Estado del Bot de Justificaciones*\n\n"
         f"• Sesiones activas: {active_sessions}\n"
         f"• Mensajes pendientes: {total_messages}\n"
         f"• Auto-eliminación: {AUTO_DELETE_MINUTES} min\n"
-        f"• Canal fuente: `{JUSTIFICATIONS_CHAT_ID}`"
+        f"• Canal fuente: `{JUSTIFICATIONS_CHAT_ID}`\n"
+        f"• Max concurrencia: {MAX_CONCURRENT_REQUESTS}\n"
     )
     
+    if active_sessions > 0:
+        status_text += "\n*Usuarios activos:*\n"
+        for uid, session in list(user_sessions.items())[:5]:
+            msg_count = len(session.get("messages", []))
+            status_text += f"• User {uid}: {msg_count} msgs\n"
+        
+        if active_sessions > 5:
+            status_text += f"... y {active_sessions - 5} más\n"
+    
     await update.message.reply_text(status_text, parse_mode="Markdown")
+
+async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Limpia mensajes del usuario actual."""
+    user_id = update.message.from_user.id
+    
+    if user_id in user_sessions:
+        await clean_previous_messages(context, user_id)
+        del user_sessions[user_id]
+        await update.message.reply_text("✅ Mensajes anteriores eliminados")
+    else:
+        await update.message.reply_text("No tienes mensajes pendientes")
+
+async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Información sobre el bot."""
+    info_text = (
+        "*🩺 Bot de Justificaciones Médicas*\n\n"
+        "Bot dedicado exclusivamente para entregar justificaciones "
+        "protegidas de casos clínicos.\n\n"
+        "*Características:*\n"
+        "• Contenido protegido (no se puede reenviar)\n"
+        "• Auto-eliminación después de 10 minutos\n"
+        "• Soporte para múltiples justificaciones\n"
+        "• Sin interferencia con otros bots\n"
+        "• Siempre disponible\n\n"
+        "*Desarrollado para:* Estudiantes de medicina\n"
+        "*Versión:* 2.0 (Bot separado)\n"
+    )
+    
+    await update.message.reply_text(info_text, parse_mode="Markdown")
+
+# ========= ERROR HANDLER =========
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja errores del bot."""
+    logger.error("Exception while handling an update:", exc_info=context.error)
 
 # ========= MAIN =========
 def main():
@@ -260,22 +372,30 @@ def main():
     # Crear aplicación
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Agregar handlers
+    # Agregar handlers de comandos
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("just", cmd_just))
     app.add_handler(CommandHandler("ayuda", cmd_help))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("clear", cmd_clear))
+    app.add_handler(CommandHandler("info", cmd_info))
     
-    # Handler para deep links
+    # Handler para deep links de justificaciones
     app.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(r"^/start just_\d+"),
+        filters.TEXT & filters.Regex(r"^/start just_[\d_]+"),
         handle_justification_request
     ))
     
+    # Error handler
+    app.add_error_handler(error_handler)
+    
+    logger.info("="*50)
     logger.info("🚀 Bot de Justificaciones iniciado!")
     logger.info(f"📚 Canal fuente: {JUSTIFICATIONS_CHAT_ID}")
     logger.info(f"⏰ Auto-eliminación: {AUTO_DELETE_MINUTES} minutos")
+    logger.info(f"🔄 Max concurrencia: {MAX_CONCURRENT_REQUESTS}")
+    logger.info("="*50)
     
     # Iniciar bot
     app.run_polling(drop_pending_updates=True)
