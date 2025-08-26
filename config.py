@@ -24,6 +24,9 @@ PREVIEW_CHAT_ID = int(os.environ.get("PREVIEW_CHAT_ID", str(PREVIEW_FALLBACK)))
 # Canal donde están almacenadas las justificaciones protegidas
 JUSTIFICATIONS_CHAT_ID = int(os.environ.get("JUSTIFICATIONS_CHAT_ID", "-1003058530208"))
 
+# Username del canal de justificaciones (para enlaces como t.me/ccjustificaciones/123)
+JUSTIFICATIONS_CHANNEL_USERNAME = os.environ.get("JUSTIFICATIONS_CHANNEL_USERNAME", "ccjustificaciones")
+
 # Tiempo en minutos antes de auto-eliminar justificaciones enviadas (0 = no eliminar)
 AUTO_DELETE_MINUTES = int(os.environ.get("AUTO_DELETE_MINUTES", "10"))
 
