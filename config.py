@@ -18,6 +18,18 @@ PREVIEW_FALLBACK = -1003042227035  # cambia si quieres
 BACKUP_CHAT_ID = int(os.environ.get("BACKUP_CHAT_ID", str(BACKUP_FALLBACK)))
 PREVIEW_CHAT_ID = int(os.environ.get("PREVIEW_CHAT_ID", str(PREVIEW_FALLBACK)))
 
+# =========================
+# CONFIG JUSTIFICACIONES
+# =========================
+# Canal donde están almacenadas las justificaciones protegidas
+JUSTIFICATIONS_CHAT_ID = int(os.environ.get("JUSTIFICATIONS_CHAT_ID", "-1003058530208"))
+
+# Tiempo en minutos antes de auto-eliminar justificaciones enviadas (0 = no eliminar)
+AUTO_DELETE_MINUTES = int(os.environ.get("AUTO_DELETE_MINUTES", "10"))
+
+# =========================
+# CONFIG GENERAL
+# =========================
 DB_FILE = os.environ.get("DB_FILE", "drafts.db")
 
 # Pausa base entre envíos (seg) para no rozar el flood control
