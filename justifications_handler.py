@@ -162,8 +162,8 @@ async def send_protected_justifications(
     Envía múltiples justificaciones protegidas al usuario.
     """
     try:
-        # Limpiar mensajes previos
-        await clean_previous_messages(context, user_id)
+        # Limpiar mensajes previos ANTES de enviar nuevas justificaciones
+        await clean_all_previous_messages(context, user_id, 0)
         
         sent_messages = []
         
