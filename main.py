@@ -31,11 +31,10 @@ from core_utils import temp_notice, extract_id_from_text, deep_link_for_channel_
 try:
     from justifications_handler import add_justification_handlers, process_justification_links
     JUSTIFICATIONS_AVAILABLE = True
-    logger.info("✅ Sistema de justificaciones cargado")
 except ImportError:
     JUSTIFICATIONS_AVAILABLE = False
     logger.warning("⚠️ Sistema de justificaciones no disponible")
-
+    logger.info("✅ Sistema de justificaciones cargado")
 # ========= LOGGING =========
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
