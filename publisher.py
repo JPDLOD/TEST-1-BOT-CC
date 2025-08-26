@@ -15,20 +15,21 @@ from database import get_unsent_drafts, mark_sent
 logger = logging.getLogger(__name__)
 
 # ========= Estado de targets =========
-ACTIVE_BACKUP: bool = True  # por defecto ON
+# BACKUP siempre activo por seguridad
+ACTIVE_BACKUP: bool = True  # SIEMPRE ON - No se puede cambiar
 
 def is_active_backup() -> bool:
-    """Lee el estado actual del backup (True/False)."""
-    return ACTIVE_BACKUP
+    """Backup siempre activo por seguridad."""
+    return True  # Siempre retorna True
 
 def set_active_backup(value: bool) -> None:
-    """Actualiza el estado global del backup de forma segura."""
-    global ACTIVE_BACKUP
-    ACTIVE_BACKUP = bool(value)
+    """DEPRECADO - Backup siempre activo."""
+    # No hace nada, backup siempre ON
+    pass
 
 def get_active_targets() -> List[int]:
     targets = [TARGET_CHAT_ID]
-    if is_active_backup() and BACKUP_CHAT_ID:
+    if BACKUP_CHAT_ID:  # Siempre incluye backup si está configurado
         targets.append(BACKUP_CHAT_ID)
     return targets
 
