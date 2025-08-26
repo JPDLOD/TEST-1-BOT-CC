@@ -17,7 +17,8 @@ CREATE INDEX IF NOT EXISTS idx_drafts_sent_deleted ON drafts(sent, deleted);
 CREATE TABLE IF NOT EXISTS buttons (
   message_id INTEGER NOT NULL,
   label      TEXT NOT NULL,
-  url        TEXT NOT NULL
+  url        TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_buttons_message ON buttons(message_id);
 """
@@ -82,7 +83,7 @@ def restore_draft(path: str, message_id: int):
 def get_last_deleted(path: str) -> Optional[int]:
     c = _conn(path)
     cur = c.execute(
-        "SELECT message_id FROM drafts WHERE sent=0 AND deleted=1 ORDER BY message_id DESC LIMIT 1"
+        "SELECT message_id FROM drafts WHERE sent=0 AND deleted=1 ORDER BY created_at DESC LIMIT 1"
     )
     row = cur.fetchone()
     return int(row[0]) if row else None
@@ -103,6 +104,7 @@ def get_draft_snippet(path: str, message_id: int) -> Optional[str]:
 # BOTONES (para @@@)
 # =========================
 def add_button(path: str, message_id: int, label: str, url: str):
+    """Agrega un botón a un mensaje específico."""
     if not (message_id and label and url):
         return
     c = _conn(path)
@@ -112,18 +114,35 @@ def add_button(path: str, message_id: int, label: str, url: str):
     )
     c.commit()
 
+def get_buttons_for_message(path: str, message_id: int) -> List[Tuple[str, str]]:
+    """Obtiene todos los botones para un mensaje específico."""
+    c = _conn(path)
+    cur = c.execute(
+        "SELECT label, url FROM buttons WHERE message_id=? ORDER BY created_at ASC",
+        (message_id,)
+    )
+    return list(cur.fetchall())
+
 def get_buttons_map_for_ids(path: str, ids: List[int]) -> Dict[int, List[Tuple[str, str]]]:
     """Devuelve {message_id: [(label, url), ...]} solo para los ids dados."""
     out: Dict[int, List[Tuple[str, str]]] = {i: [] for i in ids}
     if not ids:
         return out
     c = _conn(path)
-    q = "SELECT message_id, label, url FROM buttons WHERE message_id IN (%s) ORDER BY rowid ASC" % ",".join("?"*len(ids))
+    q = "SELECT message_id, label, url FROM buttons WHERE message_id IN (%s) ORDER BY created_at ASC" % ",".join("?"*len(ids))
     for mid, label, url in c.execute(q, ids).fetchall():
         out.setdefault(int(mid), []).append((label, url))
     return out
 
 def clear_buttons(path: str, message_id: int):
+    """Elimina todos los botones de un mensaje específico."""
     c = _conn(path)
     c.execute("DELETE FROM buttons WHERE message_id=?", (message_id,))
     c.commit()
+
+def count_buttons_for_message(path: str, message_id: int) -> int:
+    """Cuenta cuántos botones tiene un mensaje."""
+    c = _conn(path)
+    cur = c.execute("SELECT COUNT(*) FROM buttons WHERE message_id=?", (message_id,))
+    row = cur.fetchone()
+    return int(row[0] or 0)
