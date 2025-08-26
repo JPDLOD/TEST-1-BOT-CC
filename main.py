@@ -47,8 +47,9 @@ logger.info(
 # Configuración de justificaciones desde ENV
 JUSTIFICATIONS_CHAT_ID = int(os.environ.get("JUSTIFICATIONS_CHAT_ID", "-1003058530208"))
 AUTO_DELETE_MINUTES = int(os.environ.get("AUTO_DELETE_MINUTES", "10"))
+JUSTIFICATIONS_CHANNEL_USERNAME = os.environ.get("JUSTIFICATIONS_CHANNEL_USERNAME", "ccjustificaciones")
 
-logger.info(f"🔐 Justificaciones: Canal={JUSTIFICATIONS_CHAT_ID}, Auto-delete={AUTO_DELETE_MINUTES}min")
+logger.info(f"🔐 Justificaciones: Canal={JUSTIFICATIONS_CHAT_ID}, Auto-delete={AUTO_DELETE_MINUTES}min, Username={JUSTIFICATIONS_CHANNEL_USERNAME}")
 
 # -------------------------------------------------------
 # Helpers locales
@@ -220,10 +221,34 @@ async def _cmd_test_justification(update: Update, context: ContextTypes.DEFAULT_
 async def _cmd_justification_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra estadísticas de justificaciones."""
     try:
-        from justifications_handler import cmd_justification_stats
-        await cmd_justification_stats(update, context)
-    except ImportError:
-        await context.bot.send_message(SOURCE_CHAT_ID, "❌ Módulo de justificaciones no encontrado")
+        # Importar directamente la función desde el handler
+        from justifications_handler import sent_justifications
+        
+        active_justifications = len(sent_justifications)
+        
+        stats_text = f"""📊 **Estadísticas de Justificaciones**
+
+🔒 Justificaciones activas: {active_justifications}
+🕐 Auto-eliminación: {'ON (' + str(AUTO_DELETE_MINUTES) + ' min)' if AUTO_DELETE_MINUTES > 0 else 'OFF'}
+📁 Canal justificaciones: `{JUSTIFICATIONS_CHAT_ID}`
+🏷️ Username: @{JUSTIFICATIONS_CHANNEL_USERNAME}
+"""
+        
+        if active_justifications > 0:
+            stats_text += "\n📋 **Activas actualmente:**\n"
+            for cache_key, info in list(sent_justifications.items())[:5]:
+                sent_time = info['sent_at'].strftime("%H:%M:%S")
+                stats_text += f"• Usuario {info['user_id']} - Justif {info['justification_id']} ({sent_time})\n"
+            
+            if active_justifications > 5:
+                stats_text += f"... y {active_justifications - 5} más\n"
+        
+        await context.bot.send_message(SOURCE_CHAT_ID, stats_text, parse_mode="Markdown")
+        
+    except ImportError as e:
+        await context.bot.send_message(SOURCE_CHAT_ID, f"❌ Error cargando justificaciones: {e}")
+    except Exception as e:
+        await context.bot.send_message(SOURCE_CHAT_ID, f"❌ Error en estadísticas: {e}")
 
 async def _cmd_nuke(context: ContextTypes.DEFAULT_TYPE, txt: str):
     parts = (txt or "").split(maxsplit=1)
@@ -475,6 +500,26 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _cmd_justification_stats(update, context)
             await _delete_user_command_if_possible(update, context);  return
 
+        if low.startswith("/debug_just"):
+            # Comando de debug para justificaciones
+            try:
+                from justifications_handler import extract_justification_link, JUSTIFICATIONS_CHANNEL_USERNAME
+                test_url = f"https://t.me/{JUSTIFICATIONS_CHANNEL_USERNAME}/11"
+                result = extract_justification_link(test_url)
+                debug_msg = f"""🔍 **Debug Justificaciones**
+
+Canal configurado: `{JUSTIFICATIONS_CHAT_ID}`
+Username: `{JUSTIFICATIONS_CHANNEL_USERNAME}`
+Test URL: `{test_url}`
+Resultado: {result if result else 'No detectado'}
+
+Patrón esperado: `https://t.me/{JUSTIFICATIONS_CHANNEL_USERNAME}/NUMERO`
+"""
+                await context.bot.send_message(SOURCE_CHAT_ID, debug_msg, parse_mode="Markdown")
+            except Exception as e:
+                await context.bot.send_message(SOURCE_CHAT_ID, f"❌ Error debug: {e}")
+            await _delete_user_command_if_possible(update, context);  return
+
         if low.startswith(("/comandos", "/comando", "/ayuda", "/start")):
             await context.bot.send_message(SOURCE_CHAT_ID, text_main(), reply_markup=kb_main())
             await _delete_user_command_if_possible(update, context);  return
@@ -499,8 +544,12 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         justif_id = extract_justification_link(text_to_check)
         if justif_id:
             logger.info(f"🔗 Borrador {msg.message_id}: detectado enlace de justificación → {justif_id}")
+        else:
+            # Debug: mostrar qué texto se está analizando
+            if "ccjustificaciones" in text_to_check.lower():
+                logger.warning(f"⚠️ Mensaje {msg.message_id} contiene 'ccjustificaciones' pero no se detectó: '{text_to_check[:100]}...'")
     except Exception as e:
-        logger.debug(f"Error detectando justificación: {e}")
+        logger.error(f"Error detectando justificación: {e}")
     
     logger.info(f"Guardado en borrador: {msg.message_id}")
 
