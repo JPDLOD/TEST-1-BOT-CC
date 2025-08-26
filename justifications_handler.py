@@ -7,6 +7,7 @@ Detecta automáticamente enlaces de justificación y los convierte en botones pr
 import logging
 import asyncio
 import re
+import os  # ¡FALTABA ESTA IMPORTACIÓN!
 from typing import Optional, Dict, Set, Tuple
 from datetime import datetime, timedelta
 
@@ -16,11 +17,16 @@ from telegram.error import TelegramError
 
 from config import TZ, SOURCE_CHAT_ID
 
-logger = logging.getLogger(__name__)
+# Importar configuración desde config.py
+try:
+    from config import JUSTIFICATIONS_CHAT_ID, AUTO_DELETE_MINUTES, JUSTIFICATIONS_CHANNEL_USERNAME
+except ImportError:
+    # Fallback si no están definidas en config.py
+    JUSTIFICATIONS_CHAT_ID = int(os.environ.get("JUSTIFICATIONS_CHAT_ID", "-1003058530208"))
+    AUTO_DELETE_MINUTES = int(os.environ.get("AUTO_DELETE_MINUTES", "10"))
+    JUSTIFICATIONS_CHANNEL_USERNAME = os.environ.get("JUSTIFICATIONS_CHANNEL_USERNAME", "ccjustificaciones")
 
-# ========= CONFIGURACIÓN DE JUSTIFICACIONES =========
-JUSTIFICATIONS_CHAT_ID = int(os.environ.get("JUSTIFICATIONS_CHAT_ID", "-1003058530208"))
-AUTO_DELETE_MINUTES = int(os.environ.get("AUTO_DELETE_MINUTES", "10"))
+logger = logging.getLogger(__name__)
 
 # Cache para rastrear mensajes enviados y sus timers de eliminación
 sent_justifications: Dict[str, Dict] = {}
@@ -41,8 +47,8 @@ def extract_justification_link(text: str) -> Optional[int]:
         return None
     
     # MÉTODO 1: Por username del canal (como ccjustificaciones)
-    # Obtener el username del canal de justificaciones desde ENV o config
-    justif_username = os.environ.get("JUSTIFICATIONS_CHANNEL_USERNAME", "ccjustificaciones")
+    # Usar la variable importada desde config
+    justif_username = JUSTIFICATIONS_CHANNEL_USERNAME
     
     # Patrón para username: t.me/ccjustificaciones/123
     username_pattern = rf"(?:https?://)?t\.me/{re.escape(justif_username)}/(\d+)/?(?:\s|$)"
@@ -75,8 +81,8 @@ def remove_justification_link_from_text(text: str, justification_id: int) -> str
     if not text:
         return text
     
-    # Obtener username del canal
-    justif_username = os.environ.get("JUSTIFICATIONS_CHANNEL_USERNAME", "ccjustificaciones")
+    # Obtener username del canal desde config
+    justif_username = JUSTIFICATIONS_CHANNEL_USERNAME
     
     # Patrón para username
     username_pattern = rf"(?:https?://)?t\.me/{re.escape(justif_username)}/{justification_id}/?(?:\s|$)"
