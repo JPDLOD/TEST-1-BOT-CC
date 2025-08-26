@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-Sistema de Justificaciones Protegidas - VERSIÓN CORREGIDA
-Maneja deep-links para enviar justificaciones específicas desde un canal de justificaciones
+Sistema de Justificaciones Protegidas
+Versión mejorada con soporte múltiple y limpieza automática
 """
 
 import logging
 import asyncio
 import re
-from typing import Optional, Dict, Set, List
+from typing import Optional, Dict, Set, List, Tuple
 from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, MessageHandler, filters
+from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
 from config import TZ
@@ -22,231 +22,247 @@ logger = logging.getLogger(__name__)
 JUSTIFICATIONS_CHAT_ID = -1003058530208  # Canal de justificaciones
 AUTO_DELETE_MINUTES = 10  # Tiempo antes de borrar la justificación (0 = no borrar)
 
-# Cache para rastrear mensajes enviados y sus timers de eliminación
-sent_justifications: Dict[str, Dict] = {}  # {user_id_message_id: {chat_id, message_id, timer_task}}
-
-# ========= DETECCIÓN DE JUSTIFICACIONES EN MENSAJES =========
-
-# Patrón para detectar enlaces de justificación en mensajes
-# Ejemplo: https://t.me/c/1058530208/4 -> mensaje ID 4
-JUSTIFICATION_LINK_PATTERN = re.compile(
-    r'https://t\.me/c/(\d+)/(\d+)',
-    re.IGNORECASE
-)
-
-def detect_justification_links(text: str) -> List[int]:
-    """
-    Detecta enlaces de justificación en el texto del mensaje.
-    Retorna lista de IDs de mensajes de justificación.
-    """
-    if not text:
-        return []
-    
-    links = JUSTIFICATION_LINK_PATTERN.findall(text)
-    justification_ids = []
-    
-    for chat_id_part, message_id in links:
-        # Convertir el chat_id del enlace al formato completo
-        full_chat_id = f"-100{chat_id_part}"
-        
-        # Verificar si corresponde al canal de justificaciones
-        if int(full_chat_id) == JUSTIFICATIONS_CHAT_ID:
-            try:
-                justification_ids.append(int(message_id))
-                logger.info(f"📚 Link de justificación detectado: mensaje {message_id}")
-            except ValueError:
-                continue
-    
-    return justification_ids
-
-def extract_case_name(text: str) -> str:
-    """
-    Extrae el nombre del caso del texto si existe.
-    Busca patrones como "CASO #X", "🤣 CASO #34", etc.
-    """
-    if not text:
-        return ''
-    
-    # Patrones para detectar nombres de casos
-    patterns = [
-        r'([🤣😂]*\s*CASO\s*#\d+[^.\n]*)',
-        r'(CASO\s+[^.\n]+)',
-        r'(CASP\s*#\d+[^.\n]*)',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            case_name = match.group(1).strip()
-            logger.info(f"📝 Nombre de caso detectado: '{case_name}'")
-            return case_name
-    
-    return ''
+# Cache para rastrear mensajes enviados
+sent_justifications: Dict[str, Dict] = {}  # {user_id: {message_ids: [], timer_task}}
+user_joke_messages: Dict[int, List[int]] = {}  # {user_id: [message_ids]}
 
 # ========= FUNCIONES AUXILIARES =========
 
-def generate_justification_deep_link(bot_username: str, justification_ids: List[int]) -> str:
+def parse_justification_links(text: str) -> Tuple[List[int], str]:
     """
-    Genera el deep-link para justificaciones múltiples.
-    Formato: https://t.me/BotUsername?start=just_4_5_7
-    """
-    ids_str = "_".join(str(id) for id in justification_ids)
-    return f"https://t.me/{bot_username}?start=just_{ids_str}"
-
-def create_justification_button(bot_username: str, justification_ids: List[int], case_name: str = '') -> InlineKeyboardMarkup:
-    """
-    Crea el botón inline "Ver justificación 📚" con deep-link.
-    """
-    deep_link = generate_justification_deep_link(bot_username, justification_ids)
+    Extrae múltiples IDs de justificación y el nombre del caso del texto.
+    Soporta formatos:
+    - "CASO #3 https://t.me/ccjustificaciones/11"
+    - "https://t.me/ccjustificaciones/11,12,13"
+    - "https://t.me/ccjustificaciones/11-15"
+    - Múltiples links: "https://t.me/ccjustificaciones/11 https://t.me/ccjustificaciones/12"
     
-    # Personalizar texto del botón según el caso
+    Returns:
+        (lista_de_ids, nombre_del_caso)
+    """
+    justification_ids = []
+    case_name = ""
+    
+    # Buscar nombre del caso (CASO #X o cualquier texto antes del primer link)
+    case_pattern = re.search(r'^(.*?)(?=https://)', text)
+    if case_pattern:
+        potential_case = case_pattern.group(1).strip()
+        if potential_case:
+            # Limpiar emojis comunes y caracteres
+            case_name = potential_case.replace("📚", "").replace("*", "").replace("_", "").strip()
+    
+    # Patrón para detectar todos los formatos de links
+    # Soporta: /11  /11,12,13  /11-15  y múltiples links separados
+    link_pattern = re.compile(r'https?://t\.me/ccjustificaciones/(\d+(?:[,\-]\d+)*)', re.IGNORECASE)
+    
+    # Encontrar todos los matches
+    for match in link_pattern.finditer(text):
+        id_string = match.group(1)
+        
+        # Procesar rangos y comas
+        parts = id_string.split(',')
+        for part in parts:
+            if '-' in part:
+                # Es un rango
+                try:
+                    start, end = map(int, part.split('-'))
+                    justification_ids.extend(range(start, end + 1))
+                except:
+                    pass
+            else:
+                # Es un ID simple
+                try:
+                    justification_ids.append(int(part))
+                except:
+                    pass
+    
+    # Eliminar duplicados y ordenar
+    justification_ids = sorted(list(set(justification_ids)))
+    
+    return justification_ids, case_name
+
+def generate_justification_deep_link(bot_username: str, message_ids: List[int]) -> str:
+    """
+    Genera el deep-link para una o múltiples justificaciones.
+    Formato: https://t.me/BotUsername?start=just_ID1_ID2_ID3
+    """
+    ids_string = "_".join(map(str, message_ids))
+    return f"https://t.me/{bot_username}?start=just_{ids_string}"
+
+def create_justification_button(bot_username: str, message_ids: List[int], case_name: str = "") -> InlineKeyboardMarkup:
+    """
+    Crea el botón inline con el nombre del caso si está disponible.
+    """
+    deep_link = generate_justification_deep_link(bot_username, message_ids)
+    
+    # Personalizar el texto del botón según el caso
     if case_name:
-        button_text = f"Ver justificación {case_name} 📚"
+        # Limpiar el nombre del caso de caracteres especiales
+        clean_case = case_name.replace("*", "").replace("_", "").strip()
+        button_text = f"Ver justificación {clean_case} 📚"
     else:
         button_text = "Ver justificación 📚"
     
     button = InlineKeyboardButton(button_text, url=deep_link)
     return InlineKeyboardMarkup([[button]])
 
-async def clean_previous_messages(context: ContextTypes.DEFAULT_TYPE, user_id: int, keep_last_n: int = 0):
+async def clean_previous_messages(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """
-    Limpia mensajes anteriores del bot en el chat privado del usuario.
-    FUNCIÓN CORREGIDA - era 'clean_all_previous_messages' en el error.
+    Limpia TODOS los mensajes previos del usuario (justificaciones, chistes, comandos).
     """
+    # Limpiar justificaciones previas
+    user_key = str(user_id)
+    if user_key in sent_justifications:
+        user_data = sent_justifications[user_key]
+        
+        # Cancelar timer si existe
+        if "timer_task" in user_data and user_data["timer_task"]:
+            user_data["timer_task"].cancel()
+        
+        # Borrar mensajes de justificación
+        for msg_id in user_data.get("message_ids", []):
+            try:
+                await context.bot.delete_message(chat_id=user_id, message_id=msg_id)
+            except:
+                pass
+        
+        # Limpiar del cache
+        del sent_justifications[user_key]
+    
+    # Limpiar mensajes de chistes y comandos
+    if user_id in user_joke_messages:
+        for msg_id in user_joke_messages[user_id]:
+            try:
+                await context.bot.delete_message(chat_id=user_id, message_id=msg_id)
+            except:
+                pass
+        del user_joke_messages[user_id]
+    
+    # Intentar borrar mensajes de comando /start recientes (últimos 10 mensajes)
     try:
-        # Obtener historial de mensajes recientes
-        # Nota: Esta es una implementación simplificada
-        # En un caso real, necesitarías mantener un registro de mensajes enviados
-        logger.info(f"🧹 Limpiando mensajes anteriores para usuario {user_id}")
-        
-        # Por ahora, solo limpiar del cache local
-        keys_to_remove = []
-        for key in sent_justifications.keys():
-            if key.startswith(f"{user_id}_"):
-                keys_to_remove.append(key)
-        
-        for key in keys_to_remove:
-            sent_justifications.pop(key, None)
-            
-    except Exception as e:
-        logger.warning(f"⚠️ Error limpiando mensajes anteriores: {e}")
+        # Borrar hasta 10 mensajes previos para limpiar comandos
+        for offset in range(1, 11):
+            try:
+                # Intentar borrar mensaje por offset desde el actual
+                await context.bot.delete_message(
+                    chat_id=user_id, 
+                    message_id=update.message.message_id - offset
+                )
+            except:
+                pass
+    except:
+        pass
 
 async def send_protected_justifications(
     context: ContextTypes.DEFAULT_TYPE,
     user_id: int,
-    justification_ids: List[int]
+    justification_message_ids: List[int]
 ) -> bool:
     """
     Envía múltiples justificaciones protegidas al usuario.
-    FUNCIÓN CORREGIDA para manejar múltiples justificaciones.
     """
-    
     try:
-        logger.info(f"📋 Enviando justificaciones {justification_ids} a usuario {user_id}")
+        # Limpiar mensajes previos ANTES de enviar nuevas justificaciones
+        await clean_all_previous_messages(context, user_id, 0)
         
-        # Limpiar mensajes anteriores del bot
-        await clean_previous_messages(context, user_id, 0)
+        sent_messages = []
         
-        success_count = 0
-        
-        for justification_id in justification_ids:
+        for justification_id in justification_message_ids:
             try:
-                # Copiar el mensaje desde el canal de justificaciones al usuario
+                logger.info(f"📋 Enviando justificación {justification_id} a usuario {user_id}")
+                
+                # Copiar el mensaje desde el canal de justificaciones
                 copied_message = await context.bot.copy_message(
                     chat_id=user_id,
                     from_chat_id=JUSTIFICATIONS_CHAT_ID,
                     message_id=justification_id,
-                    protect_content=True  # PROTECCIÓN: No se puede copiar/reenviar/capturar
+                    protect_content=True
                 )
                 
                 if copied_message:
-                    success_count += 1
-                    logger.info(f"✅ Justificación {justification_id} enviada a {user_id}")
-                    
-                    # Programar auto-eliminación si está configurada
-                    if AUTO_DELETE_MINUTES > 0:
-                        await schedule_message_deletion(
-                            context, 
-                            user_id, 
-                            copied_message.message_id, 
-                            justification_id
-                        )
-                else:
-                    logger.error(f"❌ No se pudo copiar justificación {justification_id}")
-                    
-                # Pequeña pausa entre envíos
-                await asyncio.sleep(0.2)
+                    sent_messages.append(copied_message.message_id)
+                    logger.info(f"✅ Justificación {justification_id} enviada")
+                
+                # Pequeña pausa entre mensajes
+                if len(justification_message_ids) > 1:
+                    await asyncio.sleep(0.3)
                     
             except TelegramError as e:
                 logger.error(f"❌ Error enviando justificación {justification_id}: {e}")
                 continue
         
-        return success_count > 0
+        if not sent_messages:
+            return False
+        
+        # Guardar referencias y programar eliminación
+        user_key = str(user_id)
+        sent_justifications[user_key] = {
+            "message_ids": sent_messages,
+            "sent_at": datetime.now(tz=TZ),
+            "timer_task": None
+        }
+        
+        # Programar auto-eliminación si está configurada
+        if AUTO_DELETE_MINUTES > 0:
+            await schedule_messages_deletion(context, user_id, sent_messages)
+        
+        return True
         
     except Exception as e:
         logger.exception(f"❌ Error inesperado enviando justificaciones: {e}")
         return False
 
-async def schedule_message_deletion(
+async def schedule_messages_deletion(
     context: ContextTypes.DEFAULT_TYPE,
     user_id: int,
-    message_id: int,
-    justification_id: int
+    message_ids: List[int]
 ):
     """
-    Programa la eliminación automática de una justificación después del tiempo configurado.
+    Programa la eliminación automática de múltiples mensajes.
     """
-    
-    # Crear una tarea asyncio para la eliminación
-    async def delete_justification():
+    async def delete_messages():
         try:
-            # Esperar el tiempo configurado
             await asyncio.sleep(AUTO_DELETE_MINUTES * 60)
             
-            # Intentar borrar el mensaje
-            await context.bot.delete_message(chat_id=user_id, message_id=message_id)
-            logger.info(f"🗑️ Auto-eliminada justificación {justification_id} del usuario {user_id}")
+            # Borrar todas las justificaciones
+            for msg_id in message_ids:
+                try:
+                    await context.bot.delete_message(chat_id=user_id, message_id=msg_id)
+                except:
+                    pass
             
-            # Notificar al usuario que se eliminó
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="🕐 La justificación se ha eliminado automáticamente por seguridad.",
-                    disable_notification=True
-                )
-            except:
-                pass  # Si no se puede notificar, no importa
-                
-        except TelegramError as e:
-            if "message not found" not in str(e).lower():
-                logger.warning(f"⚠️ No se pudo auto-eliminar justificación: {e}")
+            # Borrar mensajes de chistes asociados
+            if user_id in user_joke_messages:
+                for msg_id in user_joke_messages[user_id]:
+                    try:
+                        await context.bot.delete_message(chat_id=user_id, message_id=msg_id)
+                    except:
+                        pass
+                del user_joke_messages[user_id]
+            
+            logger.info(f"🗑️ Auto-eliminadas justificaciones del usuario {user_id}")
+            
         except Exception as e:
             logger.error(f"❌ Error en auto-eliminación: {e}")
         finally:
             # Limpiar del cache
-            cache_key = f"{user_id}_{message_id}"
-            sent_justifications.pop(cache_key, None)
+            user_key = str(user_id)
+            if user_key in sent_justifications:
+                del sent_justifications[user_key]
     
     # Crear y guardar la tarea
-    deletion_task = asyncio.create_task(delete_justification())
-    cache_key = f"{user_id}_{message_id}"
+    deletion_task = asyncio.create_task(delete_messages())
     
-    sent_justifications[cache_key] = {
-        "user_id": user_id,
-        "message_id": message_id,
-        "justification_id": justification_id,
-        "sent_at": datetime.now(tz=TZ),
-        "deletion_task": deletion_task
-    }
+    user_key = str(user_id)
+    if user_key in sent_justifications:
+        sent_justifications[user_key]["timer_task"] = deletion_task
     
-    logger.info(f"⏰ Programada auto-eliminación de justificación {justification_id} en {AUTO_DELETE_MINUTES} minutos")
+    logger.info(f"⏰ Programada auto-eliminación en {AUTO_DELETE_MINUTES} minutos")
 
 async def handle_justification_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
-    Maneja las solicitudes de justificación que llegan vía deep-link /start just_ID1_ID2_ID3
-    FUNCIÓN CORREGIDA para manejar múltiples IDs.
+    Maneja las solicitudes de justificación con soporte para múltiples IDs.
     """
-    
     if not update.message or not update.message.text:
         return False
     
@@ -257,10 +273,14 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     if not text.startswith("/start just_"):
         return False
     
-    # Extraer los IDs de las justificaciones
+    # Extraer los IDs de justificación (pueden ser múltiples)
     try:
-        justification_ids_str = text.replace("/start just_", "")
-        justification_ids = [int(id_str) for id_str in justification_ids_str.split("_")]
+        ids_string = text.replace("/start just_", "")
+        justification_ids = [int(id_str) for id_str in ids_string.split("_") if id_str.isdigit()]
+        
+        if not justification_ids:
+            raise ValueError("No se encontraron IDs válidos")
+            
     except ValueError:
         logger.warning(f"⚠️ IDs de justificación inválidos: {text}")
         await update.message.reply_text(
@@ -272,7 +292,7 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     
     # Enviar mensaje de "procesando"
     processing_msg = await update.message.reply_text(
-        "🔄 Obteniendo justificaciones...",
+        "🔄 Obteniendo justificación..." if len(justification_ids) == 1 else f"🔄 Obteniendo {len(justification_ids)} justificaciones...",
         disable_notification=True
     )
     
@@ -286,75 +306,104 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
         pass
     
     if success:
-        # Mensaje de éxito con información adicional
-        count = len(justification_ids)
-        success_text = f"✅ {count} justificación(es) enviada(s) con protección anti-copia."
-        if AUTO_DELETE_MINUTES > 0:
-            success_text += f"\n🕐 Se eliminarán automáticamente en {AUTO_DELETE_MINUTES} minutos."
+        # Importar mensajes creativos
+        try:
+            from justification_messages import get_random_message
+            success_text = get_random_message()
+        except ImportError:
+            import random
+            fallback_messages = [
+                "📚 ¡Justificación lista! Revisa con calma.",
+                "✨ Material de estudio enviado.",
+                "🎯 ¡Justificación disponible!",
+                "📖 Contenido académico listo para revisar.",
+            ]
+            success_text = random.choice(fallback_messages)
         
-        await update.message.reply_text(
+        joke_msg = await update.message.reply_text(
             success_text,
             disable_notification=True
         )
+        
+        # Guardar referencia del mensaje de chiste
+        if user_id not in user_joke_messages:
+            user_joke_messages[user_id] = []
+        user_joke_messages[user_id].append(joke_msg.message_id)
+        
     else:
         await update.message.reply_text(
-            "❌ No se pudo obtener las justificaciones. Puede que el enlace sea inválido o haya un problema temporal.",
+            "❌ No se pudo obtener la justificación. Puede que el enlace sea inválido o haya un problema temporal.",
             disable_notification=True
         )
     
     return True
+
+# ========= INTEGRACIÓN CON PUBLISHER PARA DETECTAR CASOS =========
+
+def extract_justification_info(text: str) -> Tuple[List[int], str]:
+    """
+    Función helper para el publisher.
+    Extrae IDs de justificación y el nombre del caso.
+    """
+    return parse_justification_links(text)
 
 # ========= COMANDOS ADMINISTRATIVOS =========
 
 async def cmd_test_justification(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando para probar el sistema de justificaciones.
-    Uso: /test_just <message_id>
+    Uso: /test_just <message_id> o /test_just <id1,id2,id3>
     """
-    
     if not context.args:
-        await update.message.reply_text("Uso: /test_just <message_id>")
+        await update.message.reply_text("Uso: /test_just <message_id> o /test_just <id1,id2,id3>")
         return
     
     try:
-        message_id = int(context.args[0])
+        # Soportar múltiples IDs separados por comas
+        ids_str = context.args[0]
+        if ',' in ids_str:
+            message_ids = [int(id.strip()) for id in ids_str.split(',')]
+        else:
+            message_ids = [int(ids_str)]
+            
     except ValueError:
-        await update.message.reply_text("❌ ID de mensaje inválido")
+        await update.message.reply_text("❌ ID(s) de mensaje inválido(s)")
         return
     
     user_id = update.message.from_user.id
-    success = await send_protected_justifications(context, user_id, [message_id])
+    success = await send_protected_justifications(context, user_id, message_ids)
     
     if success:
-        await update.message.reply_text(f"✅ Justificación {message_id} enviada como prueba")
+        await update.message.reply_text(f"✅ Justificación(es) {message_ids} enviada(s) como prueba")
     else:
-        await update.message.reply_text(f"❌ No se pudo enviar justificación {message_id}")
+        await update.message.reply_text(f"❌ No se pudieron enviar justificaciones {message_ids}")
 
 async def cmd_justification_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Muestra estadísticas del sistema de justificaciones.
     """
-    
     active_justifications = len(sent_justifications)
+    total_messages = sum(len(data.get("message_ids", [])) for data in sent_justifications.values())
     
     stats_text = f"""
 📊 **Estadísticas de Justificaciones**
 
-🔒 Justificaciones activas: {active_justifications}
+🔒 Usuarios con justificaciones activas: {active_justifications}
+📝 Total de mensajes enviados: {total_messages}
 🕐 Auto-eliminación: {'ON' if AUTO_DELETE_MINUTES > 0 else 'OFF'}
 📁 Canal justificaciones: `{JUSTIFICATIONS_CHAT_ID}`
-
 ⏰ Tiempo de auto-eliminación: {AUTO_DELETE_MINUTES} minutos
 """
     
     if active_justifications > 0:
-        stats_text += "\n📋 **Activas actualmente:**\n"
-        for cache_key, info in list(sent_justifications.items())[:5]:  # Mostrar solo las primeras 5
+        stats_text += "\n📋 **Usuarios activos:**\n"
+        for user_key, info in list(sent_justifications.items())[:5]:
             sent_time = info['sent_at'].strftime("%H:%M:%S")
-            stats_text += f"• Usuario {info['user_id']} - Justif {info['justification_id']} ({sent_time})\n"
+            num_msgs = len(info.get('message_ids', []))
+            stats_text += f"• Usuario {user_key}: {num_msgs} mensajes ({sent_time})\n"
         
         if active_justifications > 5:
-            stats_text += f"... y {active_justifications - 5} más\n"
+            stats_text += f"... y {active_justifications - 5} usuarios más\n"
     
     await update.message.reply_text(stats_text, parse_mode="Markdown")
 
@@ -363,115 +412,17 @@ async def cmd_justification_stats(update: Update, context: ContextTypes.DEFAULT_
 def add_justification_handlers(application):
     """
     Agrega los handlers de justificaciones al bot principal.
-    Llamar esta función desde main.py después de crear la aplicación.
     """
+    from telegram.ext import CommandHandler, MessageHandler, filters
     
-    from telegram.ext import CommandHandler
-    
-    # Handler para /start just_ID (debe ir ANTES del handler general de /start)
+    # Handler para /start just_ID
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(r"^/start just_[\d_]+$"), 
+        filters.TEXT & filters.Regex(r"^/start just_\d+"), 
         handle_justification_request
-    ), group=0)  # Grupo 0 para que tenga prioridad
+    ), group=0)
     
     # Comandos administrativos
     application.add_handler(CommandHandler("test_just", cmd_test_justification))
     application.add_handler(CommandHandler("just_stats", cmd_justification_stats))
     
     logger.info("✅ Handlers de justificaciones agregados al bot")
-
-# ========= FUNCIÓN PARA DETECTAR Y PROCESAR JUSTIFICACIONES =========
-
-async def process_justification_links(
-    context: ContextTypes.DEFAULT_TYPE,
-    message_id: int,
-    text: str,
-    previous_message_id: Optional[int] = None
-) -> Optional[InlineKeyboardMarkup]:
-    """
-    Procesa los enlaces de justificación en un mensaje y retorna el botón inline.
-    
-    Args:
-        context: Contexto del bot
-        message_id: ID del mensaje actual
-        text: Texto del mensaje donde buscar enlaces
-        previous_message_id: ID del mensaje anterior (para casos donde el enlace va al mensaje previo)
-    
-    Returns:
-        InlineKeyboardMarkup con el botón de justificación o None
-    """
-    
-    justification_ids = detect_justification_links(text)
-    
-    if not justification_ids:
-        return None
-    
-    # Extraer nombre del caso si existe
-    case_name = extract_case_name(text)
-    
-    logger.info(f"📚 Justificaciones detectadas: {justification_ids} con caso: '{case_name}'")
-    
-    # Determinar a qué mensaje agregar el botón
-    target_message_id = previous_message_id if previous_message_id else message_id
-    
-    logger.info(f"🔗 Mensaje {message_id}: justificaciones {justification_ids}, caso: '{case_name}'")
-    
-    try:
-        # Obtener info del bot para el deep-link
-        bot_info = await context.bot.get_me()
-        bot_username = bot_info.username
-        
-        # Crear el botón
-        keyboard = create_justification_button(bot_username, justification_ids, case_name)
-        
-        logger.info(f"📎 Botón 'Ver justificación {case_name + ' ' if case_name else ''}📚' preparado para mensaje {target_message_id}")
-        
-        return keyboard
-        
-    except Exception as e:
-        logger.error(f"❌ Error creando botón de justificación: {e}")
-        return None
-
-# ========= FUNCIÓN PARA USAR EN LAS PUBLICACIONES =========
-
-async def add_justification_button_to_message(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
-    message_id: int,
-    justification_ids: List[int],
-    case_name: str = ''
-) -> bool:
-    """
-    Agrega un botón de justificación a un mensaje ya publicado.
-    
-    Args:
-        context: Contexto del bot
-        chat_id: ID del chat donde está el mensaje
-        message_id: ID del mensaje
-        justification_ids: IDs de las justificaciones
-        case_name: Nombre del caso (opcional)
-    
-    Returns:
-        bool: True si se agregó exitosamente
-    """
-    try:
-        # Obtener info del bot para el deep-link
-        bot_info = await context.bot.get_me()
-        bot_username = bot_info.username
-        
-        # Crear el botón
-        keyboard = create_justification_button(bot_username, justification_ids, case_name)
-        
-        # Actualizar el mensaje con el botón
-        await context.bot.edit_message_reply_markup(
-            chat_id=chat_id,
-            message_id=message_id,
-            reply_markup=keyboard
-        )
-        
-        logger.info(f"✅ Botón de justificación agregado a mensaje {message_id} → justificaciones {justification_ids}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Error agregando botón de justificación: {e}")
-        return False
