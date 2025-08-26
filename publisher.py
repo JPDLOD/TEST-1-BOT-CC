@@ -619,7 +619,7 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
             # Pequeña pausa entre análisis
             await asyncio.sleep(0.3)
     
-    # ANÁLISIS PREVIO: Detectar mensajes que son SOLO links de justificación
+    # ANÁLISIS PREVIO: Detectar mensajes que son links de justificación
     justification_buttons_for_previous = {}  # {message_index: button}
     messages_to_skip = set()  # Índices de mensajes que NO se deben enviar
     
@@ -628,18 +628,21 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
             data = json.loads(raw or "{}")
             text_content = data.get("text", "") or data.get("caption", "")
             
+            if not text_content:
+                continue
+            
             # Verificar si contiene links de justificación
-            justification_info = extract_justification_from_text(text_content)
-            if justification_info:
-                justification_ids, case_name, clean_text = justification_info
+            if 'https://t.me/ccjustificaciones/' in text_content.lower():
+                justification_info = extract_justification_from_text(text_content)
                 
-                if not clean_text:
-                    # Es SOLO links de justificación
-                    logger.info(f"🔗 Mensaje {mid} es SOLO links de justificación {justification_ids} - Caso: '{case_name}'")
+                if justification_info:
+                    justification_ids, case_name, clean_text = justification_info
+                    
+                    # SIEMPRE procesar como justificación si tiene el link
+                    logger.info(f"🔗 Mensaje {mid}: justificaciones {justification_ids}, caso: '{case_name}'")
                     
                     # Buscar el mensaje anterior (generalmente una encuesta)
                     if i > 0:
-                        # Preparar botón para el mensaje anterior
                         try:
                             bot_info = await context.bot.get_me()
                             bot_username = bot_info.username
@@ -659,7 +662,7 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
                             ]])
                             
                             justification_buttons_for_previous[i-1] = button
-                            logger.info(f"📎 Botón de justificación preparado para mensaje anterior (índice {i-1})")
+                            logger.info(f"📎 Botón '{button_text}' preparado para mensaje anterior")
                         except Exception as e:
                             logger.error(f"Error preparando botón: {e}")
                     
