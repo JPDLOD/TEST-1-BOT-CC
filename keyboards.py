@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from config import TARGET_CHAT_ID, BACKUP_CHAT_ID, PREVIEW_CHAT_ID
+from config import TARGET_CHAT_ID, BACKUP_CHAT_ID, PREVIEW_CHAT_ID, JUSTIFICATIONS_CHAT_ID, AUTO_DELETE_MINUTES
 from publisher import is_active_backup
 
 def kb_main() -> InlineKeyboardMarkup:
@@ -34,6 +34,12 @@ def text_main() -> str:
         "• /canales — IDs y **estado de targets** (principal fijo ON, backup ON/OFF, preview).\n"
         "• /backup on|off — activa o desactiva **solo** el backup (el principal siempre ON).\n"
         "• Atajo botón `@@@ TÍTULO | URL` — borra esa línea en BORRADOR y añade un **botón** al último borrador pendiente con ese TÍTULO → URL.\n"
+        "\n🔐 **Sistema de Justificaciones:**\n"
+        "• **Funcionalidad**: Al poner un enlace del canal de justificaciones en un borrador, se convierte automáticamente en botón 'Ver justificación 🔒'.\n"
+        "• **Formato**: `https://t.me/c/3058530208/123` (enlace del mensaje de justificación).\n"
+        "• **Seguridad**: Las justificaciones se envían con protección anti-copia y se auto-eliminan en " + str(AUTO_DELETE_MINUTES) + " minutos.\n"
+        "• /test_just <id> — prueba el envío de una justificación específica.\n"
+        "• /just_stats — estadísticas del sistema de justificaciones.\n"
         "\nPulsa un botón o usa /comandos para ver este panel nuevamente."
     )
 
@@ -52,6 +58,9 @@ def text_settings() -> str:
         f"• Principal: `{TARGET_CHAT_ID}` **ON** (fijo)\n"
         f"• Backup   : `{BACKUP_CHAT_ID}` **{onoff}**\n"
         f"• Preview  : `{PREVIEW_CHAT_ID}`\n\n"
+        f"🔐 **Justificaciones**\n"
+        f"• Canal: `{JUSTIFICATIONS_CHAT_ID}`\n"
+        f"• Auto-delete: {AUTO_DELETE_MINUTES} min\n\n"
         "Usa el botón para alternar backup.\n"
         "⬅️ *Volver* regresa al menú principal."
     )
