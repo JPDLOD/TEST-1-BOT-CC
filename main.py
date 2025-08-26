@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Set
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, ContextTypes, CallbackQueryHandler, PollHandler, PollAnswerHandler, filters
@@ -17,7 +17,7 @@ from config import (
 )
 from database import (
     init_db, save_draft, get_unsent_drafts, list_drafts,
-    add_button, get_buttons_map_for_ids, clear_buttons
+    add_button, clear_buttons
 )
 from publisher import publicar_todo_activos, publicar_ids, get_active_targets, STATS, SCHEDULED_LOCK
 from publisher import handle_poll_update, handle_poll_answer_update, detect_voted_polls_on_save
@@ -299,10 +299,36 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(text_schedule(), reply_markup=kb_schedule(), parse_mode="Markdown")
         
         elif data == "m:status":
-            await q.edit_message_text(text_status(), reply_markup=kb_main(), parse_mode="Markdown")
+            try:
+                await q.edit_message_text(text_status(), reply_markup=kb_main(), parse_mode="Markdown")
+            except TelegramError as e:
+                if "Message is not modified" in str(e):
+                    # Si el mensaje ya tiene el mismo contenido, no hacer nada
+                    pass
+                else:
+                    raise
         
         elif data == "m:back":
             await q.edit_message_text(text_main(), reply_markup=kb_main(), parse_mode="Markdown")
+        
+        # Para compatibilidad con botones antiguos
+        elif data == "m:settings":
+            # Redirigir a status
+            try:
+                await q.edit_message_text(text_status(), reply_markup=kb_main(), parse_mode="Markdown")
+            except TelegramError as e:
+                if "Message is not modified" in str(e):
+                    pass
+                else:
+                    raise
+        
+        elif data == "m:toggle_backup":
+            # Ya no se puede cambiar, solo mostrar estado
+            await q.answer("⚠️ El backup está siempre activo por seguridad", show_alert=True)
+            try:
+                await q.edit_message_text(text_status(), reply_markup=kb_main(), parse_mode="Markdown")
+            except TelegramError:
+                pass
         
         # Programación rápida
         elif data.startswith("s:"):
@@ -347,7 +373,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await schedule_ids(context, when, ids)
     
     except Exception as e:
-        logger.exception(f"Error en callback: {e}")
+        if "Message is not modified" not in str(e):
+            logger.exception(f"Error en callback: {e}")
 
 # -------------------------------------------------------
 # Handler principal del canal (BORRADOR)
@@ -440,6 +467,21 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
+        if low.startswith("/test_just"):
+            # Comando de prueba para justificaciones
+            parts = txt.split(maxsplit=1)
+            if len(parts) < 2:
+                await context.bot.send_message(SOURCE_CHAT_ID, "Uso: /test_just <id> o /test_just <id1,id2,id3>")
+            else:
+                try:
+                    from justifications_handler import cmd_test_justification
+                    # Crear un update simulado para el comando
+                    await cmd_test_justification(update, context)
+                except ImportError:
+                    await context.bot.send_message(SOURCE_CHAT_ID, "❌ Módulo de justificaciones no disponible")
+            await _delete_user_command_if_possible(update, context)
+            return
+
         if low.startswith(("/comandos", "/ayuda", "/start")):
             await context.bot.send_message(SOURCE_CHAT_ID, text_main(), reply_markup=kb_main(), parse_mode="Markdown")
             await _delete_user_command_if_possible(update, context)
@@ -463,7 +505,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if drafts:
             last_draft_id = drafts[-1][0]
             
-            # Limpiar botones previos y agregar el nuevo
+            # Agregar el botón (la función clear_buttons ya está en database.py)
             clear_buttons(DB_FILE, last_draft_id)
             add_button(DB_FILE, last_draft_id, label, url)
             
@@ -530,6 +572,14 @@ def main():
     app.add_handler(PollHandler(handle_poll_update))
     app.add_handler(PollAnswerHandler(handle_poll_answer_update))
     
+    # Agregar handlers de justificaciones si el módulo existe
+    try:
+        from justifications_handler import add_justification_handlers
+        add_justification_handlers(app)
+        logger.info("✅ Sistema de justificaciones activado")
+    except ImportError:
+        logger.warning("⚠️ Módulo de justificaciones no encontrado")
+    
     # Handler principal del canal
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
     
@@ -546,7 +596,7 @@ def main():
     app.post_init = _set_bot_commands
 
     app.run_polling(
-        allowed_updates=["channel_post", "callback_query", "poll", "poll_answer"], 
+        allowed_updates=["channel_post", "callback_query", "poll", "poll_answer", "message"], 
         drop_pending_updates=True
     )
 
