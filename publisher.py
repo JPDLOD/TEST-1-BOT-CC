@@ -48,11 +48,13 @@ POLL_ID_TO_MESSAGE_ID: Dict[str, int] = {}     # {poll_id: message_id} mapeo
 
 # ========= PATRÓN PARA DETECTAR LINKS DE JUSTIFICACIONES =========
 
+# Mejorado para detectar múltiples formatos
+
 JUSTIFICATION_LINK_PATTERN = re.compile(r’https?://t.me/ccjustificaciones/(\d+(?:[,-]\d+)*)’, re.IGNORECASE)
 
 # ========= Función para detectar y extraer justificaciones =========
 
-def extract_justification_from_text(text: str) -> Optional[Tuple[List[int], str]]:
+def extract_justification_from_text(text: str) -> Optional[Tuple[List[int], str, str]]:
 “””
 Detecta si un texto contiene links de justificación y extrae el nombre del caso.
 Soporta múltiples IDs y rangos.
@@ -65,33 +67,47 @@ return None
 justification_ids = []
 case_name = ""
 
-# Buscar nombre del caso (texto antes del link)
-case_pattern = re.search(r'^(.*?)(?=https://)', text)
-if case_pattern:
-    potential_case = case_pattern.group(1).strip()
-    # Limpiar emojis y caracteres especiales comunes
-    if potential_case:
-        case_name = potential_case.replace("📚", "").replace("*", "").replace("_", "").strip()
+# Buscar todos los matches de justificaciones
+has_justification = JUSTIFICATION_LINK_PATTERN.search(text)
+if not has_justification:
+    return None
 
-# Extraer todos los IDs
+# Buscar nombre del caso (texto antes del primer link)
+case_match = re.search(r'^(.*?)https://t\.me/ccjustificaciones/', text, re.IGNORECASE)
+if case_match:
+    potential_case = case_match.group(1).strip()
+    if potential_case:
+        # Limpiar pero mantener el formato del caso
+        case_name = potential_case.replace("*", "").replace("_", "").strip()
+
+# Extraer todos los IDs de todos los links encontrados
 for match in JUSTIFICATION_LINK_PATTERN.finditer(text):
     id_string = match.group(1)
     
-    # Procesar rangos y comas
+    # Procesar el string de IDs que puede contener comas y/o rangos
+    # Por ejemplo: "10,11,15-18,20"
     parts = id_string.split(',')
     for part in parts:
+        part = part.strip()
         if '-' in part:
             # Es un rango
             try:
-                start, end = map(int, part.split('-'))
-                justification_ids.extend(range(start, end + 1))
-            except:
-                pass
+                range_parts = part.split('-')
+                if len(range_parts) == 2:
+                    start = int(range_parts[0].strip())
+                    end = int(range_parts[1].strip())
+                    justification_ids.extend(range(start, end + 1))
+            except (ValueError, IndexError):
+                # Si hay error, intentar agregar como ID individual
+                try:
+                    justification_ids.append(int(part))
+                except:
+                    pass
         else:
             # Es un ID simple
             try:
-                justification_ids.append(int(part))
-            except:
+                justification_ids.append(int(part.strip()))
+            except ValueError:
                 pass
 
 if not justification_ids:
@@ -100,8 +116,10 @@ if not justification_ids:
 # Eliminar duplicados y ordenar
 justification_ids = sorted(list(set(justification_ids)))
 
-# Eliminar los links del texto
+# Eliminar TODOS los links del texto
 clean_text = JUSTIFICATION_LINK_PATTERN.sub('', text).strip()
+
+logger.info(f"📚 Justificaciones detectadas: {justification_ids} con caso: '{case_name}'")
 
 return justification_ids, case_name, clean_text
 ```
@@ -152,13 +170,12 @@ return False, None
         return False, None
 ```
 
-# ========= DETECCIÓN EXHAUSTIVA DE RESPUESTA CORRECTA =========
+# ========= DETECCIÓN DE RESPUESTA CORRECTA EN POLLS =========
 
 def detect_voted_polls_on_save(message_id: int, raw_json: str):
 “””
 Se ejecuta cuando se guarda un borrador.
-Detecta si es una encuesta quiz y construye el mapeo poll_id.
-Ahora también detecta si el mensaje es forwardeado.
+Detecta si es una encuesta quiz y guarda el mapeo poll_id.
 “””
 try:
 data = json.loads(raw_json)
@@ -170,55 +187,29 @@ return
     if poll.get("type") != "quiz":
         return
     
-    # DETECTAR SI ES MENSAJE FORWARDEADO
-    is_forwarded = False
-    forward_info = ""
-    
-    # Revisar campos que indican forwarding
-    forward_fields = ["forward_from", "forward_from_chat", "forward_from_message_id", "forward_sender_name", "forward_date"]
-    for field in forward_fields:
-        if field in data:
-            is_forwarded = True
-            forward_info += f" {field}={data[field]}"
-            break
-    
-    # Crear mapeo poll_id -> message_id SIEMPRE
+    # Crear mapeo poll_id -> message_id
     if "id" in poll:
         poll_id = str(poll["id"])
         POLL_ID_TO_MESSAGE_ID[poll_id] = message_id
+        logger.info(f"🗺️ Quiz detectado: poll_id {poll_id} → message_id {message_id}")
         
-        status = "FORWARDEADO" if is_forwarded else "DIRECTO"
-        logger.info(f"🗺️ Quiz {status}: poll_id {poll_id} → message_id {message_id}")
-        if is_forwarded:
-            logger.info(f"📤 Forward info:{forward_info}")
-        
-        # Log información disponible
-        total_voters = poll.get("total_voter_count", 0)
-        is_closed = poll.get("is_closed", False)
+        # Si ya tiene correct_option_id, usarlo
         correct_option_id = poll.get("correct_option_id")
-        
-        logger.info(f"📊 Quiz {message_id}: votos={total_voters}, cerrado={is_closed}, correct_id={correct_option_id}")
-        
-        # Si ya tiene correct_option_id disponible, usarlo inmediatamente
         if correct_option_id is not None:
             try:
                 correct_id = int(correct_option_id)
                 DETECTED_CORRECT_ANSWERS[message_id] = correct_id
-                logger.info(f"✅ DIRECTO: Quiz {message_id} ya tiene correct_option_id = {correct_id} ({chr(65+correct_id)})")
+                logger.info(f"✅ Quiz {message_id} tiene correct_option_id = {correct_id}")
             except (ValueError, TypeError):
                 pass
-        
-        # Para mensajes forwardeados, marcar para análisis especial
-        if is_forwarded:
-            logger.info(f"⚠️ Quiz {message_id} es FORWARDEADO - stopPoll no funcionará, usando métodos alternativos")
 
 except Exception as e:
-    logger.error(f"Error analizando poll en save: {e}")
+    logger.error(f"Error analizando poll: {e}")
 ```
 
 async def extract_correct_answer_via_stop_poll(context: ContextTypes.DEFAULT_TYPE, message_id: int, is_forwarded: bool = False, raw_data: dict = None) -> Optional[int]:
 “””
-MÉTODO MEJORADO: Intenta stopPoll en canal origen si es reenviado.
+Intenta stopPoll en canal origen si es reenviado, o en el canal actual si no.
 “””
 
 ```
@@ -229,9 +220,8 @@ if is_forwarded and raw_data:
     
     if forward_from_chat_id and forward_from_message_id:
         try:
-            logger.info(f"🔄 Mensaje reenviado detectado. Intentando stopPoll en canal origen {forward_from_chat_id}")
+            logger.info(f"🔄 Mensaje reenviado. Intentando stopPoll en origen {forward_from_chat_id}")
             
-            # Intentar stopPoll en el canal origen
             stopped_poll = await context.bot.stop_poll(
                 chat_id=forward_from_chat_id,
                 message_id=forward_from_message_id
@@ -249,20 +239,16 @@ if is_forwarded and raw_data:
 # Si no es forwarded o falló en origen, intentar en el canal actual
 if not is_forwarded:
     try:
-        logger.info(f"🛑 EJECUTANDO stopPoll en quiz {message_id} (mensaje directo)...")
+        logger.info(f"🛑 Ejecutando stopPoll en quiz {message_id}...")
         
         stopped_poll = await context.bot.stop_poll(
             chat_id=SOURCE_CHAT_ID, 
             message_id=message_id
         )
         
-        if not stopped_poll:
-            logger.error(f"❌ stopPoll no devolvió resultado para {message_id}")
-            return None
-        
-        if hasattr(stopped_poll, 'correct_option_id') and stopped_poll.correct_option_id is not None:
+        if stopped_poll and hasattr(stopped_poll, 'correct_option_id') and stopped_poll.correct_option_id is not None:
             correct_id = stopped_poll.correct_option_id
-            logger.info(f"🎯 ¡ENCONTRADO! correct_option_id = {correct_id}")
+            logger.info(f"🎯 correct_option_id = {correct_id}")
             DETECTED_CORRECT_ANSWERS[message_id] = correct_id
             return correct_id
         
@@ -270,7 +256,7 @@ if not is_forwarded:
         if hasattr(stopped_poll, 'options') and stopped_poll.options:
             for i, option in enumerate(stopped_poll.options):
                 if option.voter_count > 0:
-                    logger.info(f"🗳️ Tu voto detectado en opción {i}")
+                    logger.info(f"🗳️ Voto detectado en opción {i}")
                     DETECTED_CORRECT_ANSWERS[message_id] = i
                     return i
     
@@ -280,172 +266,94 @@ if not is_forwarded:
 return None
 ```
 
-def extract_correct_answer_from_forwarded_poll_analysis(poll_data: dict, message_id: int) -> Optional[int]:
-“””
-MÉTODO ESPECIAL para mensajes FORWARDEADOS donde stopPoll no funciona.
-Usa análisis más agresivo del JSON y patrones de detección.
-“””
-try:
-logger.info(f”🔍 ANÁLISIS FORWARDEADO: Quiz {message_id}”)
-
-```
-    # Método 1: correct_option_id directo (a veces existe en forwardeados)
-    if "correct_option_id" in poll_data and poll_data["correct_option_id"] is not None:
-        try:
-            correct_id = int(poll_data["correct_option_id"])
-            logger.info(f"✅ FORWARDED MÉTODO 1: correct_option_id directo = {correct_id}")
-            return correct_id
-        except (ValueError, TypeError):
-            pass
-    
-    # Método 2: Buscar en opciones por voter_count (más común en forwardeados)
-    options = poll_data.get("options", [])
-    vote_pattern = []
-    
-    for i, option in enumerate(options):
-        if isinstance(option, dict):
-            voter_count = option.get("voter_count", 0)
-            vote_pattern.append((i, voter_count))
-            if voter_count > 0:
-                logger.info(f"✅ FORWARDED MÉTODO 2: Opción {i} ({chr(65+i)}) tiene {voter_count} voto(s)")
-                return i
-    
-    logger.info(f"📊 Patrón de votos: {vote_pattern}")
-    
-    # Método 3: Análisis de explanation para pistas
-    explanation = poll_data.get("explanation", "")
-    if explanation:
-        logger.info(f"📝 Analizando explanation: '{explanation[:100]}...'")
-        
-        # Buscar patrones como "La respuesta correcta es C" o "Opción correcta: D"
-        import re
-        patterns = [
-            r'respuesta correcta es ([A-D])',
-            r'opci[óo]n correcta[:\s]*([A-D])',
-            r'correcta[:\s]*([A-D])',
-            r'la ([A-D]) es correcta',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, explanation, re.IGNORECASE)
-            if match:
-                letter = match.group(1).upper()
-                correct_id = ord(letter) - ord('A')
-                logger.info(f"✅ FORWARDED MÉTODO 3: Explanation indica {letter} (pos {correct_id})")
-                return correct_id
-    
-    # Método 4: Heurística - si solo una opción está votada y total_voter_count = 1
-    total_voters = poll_data.get("total_voter_count", 0)
-    if total_voters == 1:
-        for i, (option_i, voter_count) in enumerate(vote_pattern):
-            if voter_count == 1:
-                logger.info(f"✅ FORWARDED MÉTODO 4: Heurística - única opción votada {option_i} ({chr(65+option_i)})")
-                return option_i
-    
-    logger.warning(f"⚠️ FORWARDED: No se pudo detectar respuesta correcta para quiz {message_id}")
-    return None
-    
-except Exception as e:
-    logger.error(f"Error en análisis de poll forwardeado: {e}")
-    return None
-```
-
 def is_message_forwarded(raw_data: dict) -> bool:
-“”“Detecta si un mensaje es forwardeado basándose en el JSON.”””
+“”“Detecta si un mensaje es forwardeado.”””
 forward_fields = [“forward_from”, “forward_from_chat”, “forward_from_message_id”, “forward_sender_name”, “forward_date”]
 return any(field in raw_data for field in forward_fields)
 
 def extract_correct_answer_from_json_deep_analysis(poll_data: dict, message_id: int) -> Optional[int]:
-“””
-ANÁLISIS PROFUNDO del JSON del poll para encontrar cualquier pista sobre la respuesta correcta.
-“””
+“”“Análisis del JSON del poll para encontrar la respuesta correcta.”””
 try:
-logger.info(f”🔬 ANÁLISIS PROFUNDO del JSON para quiz {message_id}”)
+# Método 1: correct_option_id directo
+if “correct_option_id” in poll_data and poll_data[“correct_option_id”] is not None:
+try:
+correct_id = int(poll_data[“correct_option_id”])
+logger.info(f”✅ correct_option_id directo = {correct_id}”)
+return correct_id
+except (ValueError, TypeError):
+pass
 
 ```
-    # Método 1: correct_option_id directo
-    if "correct_option_id" in poll_data and poll_data["correct_option_id"] is not None:
-        try:
-            correct_id = int(poll_data["correct_option_id"])
-            logger.info(f"✅ MÉTODO 1: correct_option_id directo = {correct_id}")
-            return correct_id
-        except (ValueError, TypeError):
-            pass
-    
     # Método 2: Buscar en opciones por voter_count
     options = poll_data.get("options", [])
     for i, option in enumerate(options):
         if isinstance(option, dict):
             voter_count = option.get("voter_count", 0)
             if voter_count > 0:
-                logger.info(f"✅ MÉTODO 2: Opción {i} ({chr(65+i)}) tiene {voter_count} voto(s)")
+                logger.info(f"✅ Opción {i} tiene {voter_count} voto(s)")
                 return i
-    
-    # Método 3: Buscar en results/poll_results
-    for results_key in ["results", "poll_results"]:
-        if results_key in poll_data:
-            results = poll_data[results_key]
-            if isinstance(results, dict) and "results" in results:
-                results_list = results["results"]
-                for i, result in enumerate(results_list):
-                    if isinstance(result, dict):
-                        if result.get("correct", False):
-                            logger.info(f"✅ MÉTODO 3: Opción {i} marcada como 'correct' en {results_key}")
-                            return i
-                        elif result.get("voter_count", 0) > 0:
-                            logger.info(f"✅ MÉTODO 3: Opción {i} tiene votos en {results_key}")
-                            return i
-    
-    # Método 4: Buscar recursivamente cualquier campo que contenga "correct"
-    def buscar_correct_recursivo(obj, path=""):
-        if isinstance(obj, dict):
-            for key, value in obj.items():
-                current_path = f"{path}.{key}" if path else key
-                
-                if key == "correct" and value is True:
-                    logger.info(f"🔍 MÉTODO 4: Encontrado 'correct': True en {current_path}")
-                    return True
-                elif key == "correct_option_id" and value is not None:
-                    logger.info(f"🔍 MÉTODO 4: Encontrado correct_option_id = {value} en {current_path}")
-                    try:
-                        return int(value)
-                    except (ValueError, TypeError):
-                        pass
-                
-                result = buscar_correct_recursivo(value, current_path)
-                if result is not None:
-                    return result
-        
-        elif isinstance(obj, list):
-            for i, item in enumerate(obj):
-                current_path = f"{path}[{i}]"
-                result = buscar_correct_recursivo(item, current_path)
-                if result is not None:
-                    return result
-        
-        return None
-    
-    resultado_recursivo = buscar_correct_recursivo(poll_data)
-    if resultado_recursivo is not None:
-        logger.info(f"✅ MÉTODO 4: Búsqueda recursiva encontró: {resultado_recursivo}")
-        if isinstance(resultado_recursivo, int):
-            return resultado_recursivo
-    
-    # Método 5: Log completo del JSON para debugging manual
-    logger.warning(f"⚠️ ANÁLISIS EXHAUSTIVO: No se encontró respuesta correcta en quiz {message_id}")
-    logger.debug(f"📄 JSON completo del poll: {json.dumps(poll_data, indent=2, default=str)}")
     
     return None
     
 except Exception as e:
-    logger.error(f"Error en análisis profundo: {e}")
+    logger.error(f"Error en análisis: {e}")
     return None
 ```
 
-# ========= HANDLERS PARA CAPTURAR VOTOS EN TIEMPO REAL =========
+def extract_correct_answer_from_forwarded_poll_analysis(poll_data: dict, message_id: int) -> Optional[int]:
+“”“Análisis especial para mensajes forwardeados.”””
+return extract_correct_answer_from_json_deep_analysis(poll_data, message_id)
+
+async def get_correct_answer_comprehensive(context: ContextTypes.DEFAULT_TYPE, message_id: int, poll_data: dict, raw_message_data: dict = None) -> int:
+“”“Método integral para detectar la respuesta correcta.”””
+
+```
+# Verificar cache primero
+if message_id in DETECTED_CORRECT_ANSWERS:
+    detected_answer = DETECTED_CORRECT_ANSWERS[message_id]
+    logger.info(f"🎯 Quiz {message_id}: usando respuesta cacheada → {chr(65+detected_answer)}")
+    return detected_answer
+
+# Detectar si es forwardeado
+is_forwarded = False
+if raw_message_data:
+    is_forwarded = is_message_forwarded(raw_message_data)
+
+# Análisis del JSON
+json_result = extract_correct_answer_from_json_deep_analysis(poll_data, message_id)
+if json_result is not None:
+    DETECTED_CORRECT_ANSWERS[message_id] = json_result
+    return json_result
+
+# stopPoll
+stop_poll_result = await extract_correct_answer_via_stop_poll(
+    context, message_id, is_forwarded, raw_message_data
+)
+if stop_poll_result is not None:
+    return stop_poll_result
+
+logger.error(f"❌ No se pudo detectar respuesta correcta para quiz {message_id}")
+return 0  # Fallback a A
+```
+
+def get_correct_answer_sync(message_id: int, poll_data: dict) -> int:
+“”“Versión síncrona para casos donde no hay contexto async.”””
+if message_id in DETECTED_CORRECT_ANSWERS:
+return DETECTED_CORRECT_ANSWERS[message_id]
+
+```
+json_result = extract_correct_answer_from_json_deep_analysis(poll_data, message_id)
+if json_result is not None:
+    DETECTED_CORRECT_ANSWERS[message_id] = json_result
+    return json_result
+
+return 0
+```
+
+# ========= HANDLERS PARA CAPTURAR VOTOS =========
 
 async def handle_poll_update(update, context):
-“”“Handler para capturar cuando una encuesta es actualizada (alguien votó).”””
+“”“Handler para capturar cuando una encuesta es actualizada.”””
 if not update.poll:
 return
 
@@ -453,31 +361,18 @@ return
 poll = update.poll
 poll_id = str(poll.id)
 
-logger.info(f"🔄 UPDATE POLL: poll_id={poll_id}, votos totales={poll.total_voter_count}")
-
-# Encontrar message_id correspondiente
 message_id = POLL_ID_TO_MESSAGE_ID.get(poll_id)
 if not message_id:
-    logger.warning(f"⚠️ No se encontró message_id para poll_id {poll_id}")
     return
 
-# Intentar extraer correct_option_id del poll actualizado
 if hasattr(poll, 'correct_option_id') and poll.correct_option_id is not None:
     correct_id = poll.correct_option_id
     DETECTED_CORRECT_ANSWERS[message_id] = correct_id
-    logger.info(f"✅ UPDATE POLL: Quiz {message_id} → correct_option_id = {correct_id} ({chr(65+correct_id)})")
-    return
-
-# Si no tiene correct_option_id, detectar por votos
-for i, option in enumerate(poll.options):
-    if option.voter_count > 0:
-        DETECTED_CORRECT_ANSWERS[message_id] = i
-        logger.info(f"✅ UPDATE POLL: Quiz {message_id} → Detectado voto en opción {i} ({chr(65+i)})")
-        return
+    logger.info(f"✅ Poll update: Quiz {message_id} → correct_option_id = {correct_id}")
 ```
 
 async def handle_poll_answer_update(update, context):
-“”“Handler para capturar respuestas individuales de usuarios.”””
+“”“Handler para capturar respuestas de usuarios.”””
 if not update.poll_answer:
 return
 
@@ -488,84 +383,18 @@ option_ids = list(poll_answer.option_ids) if poll_answer.option_ids else []
 
 message_id = POLL_ID_TO_MESSAGE_ID.get(poll_id)
 if not message_id:
-    logger.warning(f"⚠️ No se encontró message_id para poll_id {poll_id}")
     return
 
 if option_ids and len(option_ids) > 0:
-    chosen_option = option_ids[0]  # Quiz solo permite una opción
+    chosen_option = option_ids[0]
     DETECTED_CORRECT_ANSWERS[message_id] = chosen_option
-    logger.info(f"✅ POLL ANSWER: Quiz {message_id} → Usuario eligió {chr(65+chosen_option)} (posición {chosen_option})")
+    logger.info(f"✅ Poll answer: Quiz {message_id} → opción {chosen_option}")
 ```
 
-# ========= FUNCIÓN PRINCIPAL PARA OBTENER RESPUESTA CORRECTA =========
-
-async def get_correct_answer_comprehensive(context: ContextTypes.DEFAULT_TYPE, message_id: int, poll_data: dict, raw_message_data: dict = None) -> int:
-“””
-MÉTODO INTEGRAL mejorado con soporte para mensajes reenviados.
-“””
-
-```
-# Verificar cache primero
-if message_id in DETECTED_CORRECT_ANSWERS:
-    detected_answer = DETECTED_CORRECT_ANSWERS[message_id]
-    logger.info(f"🎯 Quiz {message_id}: usando respuesta cacheada → {chr(65+detected_answer)} (pos {detected_answer})")
-    return detected_answer
-
-# Detectar si el mensaje es forwardeado
-is_forwarded = False
-if raw_message_data:
-    is_forwarded = is_message_forwarded(raw_message_data)
-
-logger.info(f"🔍 Quiz {message_id}: tipo={'FORWARDEADO' if is_forwarded else 'DIRECTO'}")
-
-# ENFOQUE 1: Análisis profundo del JSON
-json_result = extract_correct_answer_from_json_deep_analysis(poll_data, message_id)
-if json_result is not None:
-    DETECTED_CORRECT_ANSWERS[message_id] = json_result
-    return json_result
-
-# ENFOQUE 2: stopPoll (ahora también funciona para forwardeados)
-stop_poll_result = await extract_correct_answer_via_stop_poll(
-    context, message_id, is_forwarded, raw_message_data
-)
-if stop_poll_result is not None:
-    return stop_poll_result
-
-# ENFOQUE 3: Análisis específico para forwardeados
-if is_forwarded:
-    logger.info(f"🔍 Quiz {message_id}: aplicando análisis adicional para FORWARDEADOS...")
-    forwarded_result = extract_correct_answer_from_forwarded_poll_analysis(poll_data, message_id)
-    if forwarded_result is not None:
-        DETECTED_CORRECT_ANSWERS[message_id] = forwarded_result
-        return forwarded_result
-
-# FALLBACK: Si todo falla
-logger.error(f"❌ FALLO: Quiz {message_id} - No se pudo detectar respuesta correcta")
-logger.warning(f"💡 TIP: Vota en la encuesta antes de reenviarla al borrador")
-
-return 0  # Fallback a A
-```
-
-def get_correct_answer_sync(message_id: int, poll_data: dict) -> int:
-“”“Versión síncrona para casos donde no hay contexto async.”””
-
-```
-if message_id in DETECTED_CORRECT_ANSWERS:
-    return DETECTED_CORRECT_ANSWERS[message_id]
-
-# Solo análisis del JSON (sin stopPoll)
-json_result = extract_correct_answer_from_json_deep_analysis(poll_data, message_id)
-if json_result is not None:
-    DETECTED_CORRECT_ANSWERS[message_id] = json_result
-    return json_result
-
-return 0
-```
-
-# ========= Encuestas - VERSIÓN FINAL =========
+# ========= Encuestas =========
 
 def _poll_payload_from_raw(raw: dict, message_id: int = None):
-“”“Extrae parámetros de la encuesta con detección integral.”””
+“”“Extrae parámetros de la encuesta.”””
 p = raw.get(“poll”) or {}
 question = p.get(“question”, “Pregunta”)
 options_src = p.get(“options”, []) or []
@@ -588,7 +417,6 @@ if not is_quiz:
 else:
     kwargs["type"] = "quiz"
     
-    # USAR DETECCIÓN INTEGRAL (versión síncrona para construcción inicial)
     if message_id:
         correct_option_id = get_correct_answer_sync(message_id, p)
     else:
@@ -620,7 +448,7 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
 targets: List[int], mark_as_sent: bool) -> Tuple[int, int, Dict[int, List[int]]]:
 
 ```
-# ANÁLISIS PREVIO EXHAUSTIVO: Procesar todos los quizzes que no tengan respuesta detectada
+# ANÁLISIS PREVIO: Procesar quizzes sin respuesta detectada
 quizzes_to_analyze = []
 
 for mid, _t, raw in rows:
@@ -628,22 +456,17 @@ for mid, _t, raw in rows:
         data = json.loads(raw or "{}")
         if "poll" in data and data["poll"].get("type") == "quiz":
             if mid not in DETECTED_CORRECT_ANSWERS:
-                quizzes_to_analyze.append((mid, data["poll"], data))  # Agregamos data completa
+                quizzes_to_analyze.append((mid, data["poll"], data))
     except:
         continue
 
 if quizzes_to_analyze:
-    logger.info(f"🔬 ANÁLISIS PREVIO: Procesando {len(quizzes_to_analyze)} quizzes sin respuesta detectada")
+    logger.info(f"🔬 Procesando {len(quizzes_to_analyze)} quizzes")
     
     for quiz_mid, poll_data, full_message_data in quizzes_to_analyze:
         is_forwarded = is_message_forwarded(full_message_data)
-        logger.info(f"🧪 Analizando quiz {quiz_mid} ({'FORWARDED' if is_forwarded else 'DIRECT'})...")
-        
-        # Usar método integral con información completa del mensaje
         detected = await get_correct_answer_comprehensive(context, quiz_mid, poll_data, full_message_data)
-        logger.info(f"🎯 Quiz {quiz_mid}: análisis completado → {chr(65+detected)}")
-        
-        # Pequeña pausa entre análisis
+        logger.info(f"🎯 Quiz {quiz_mid}: respuesta → {chr(65+detected)}")
         await asyncio.sleep(0.3)
 
 # ANÁLISIS PREVIO: Detectar mensajes que son links de justificación
@@ -703,13 +526,11 @@ publicados = 0
 fallidos = 0
 enviados_ids: List[int] = []
 posted_by_target: Dict[int, List[int]] = {t: [] for t in targets}
-last_sent_messages = {}  # {target: last_message}
 
 for i, (mid, _t, raw) in enumerate(rows):
     # SALTAR mensajes que son solo links de justificación
     if i in messages_to_skip:
-        logger.info(f"⏭️ Saltando mensaje {mid} (solo link de justificación)")
-        # Marcar como enviado para que no quede pendiente
+        logger.info(f"⏭️ Saltando mensaje {mid} (link de justificación)")
         if mark_as_sent:
             enviados_ids.append(mid)
         continue
@@ -719,18 +540,6 @@ for i, (mid, _t, raw) in enumerate(rows):
     except Exception as e:
         logger.error(f"Error parseando JSON para mensaje {mid}: {e}")
         data = {}
-
-    # Procesar texto para quitar links de justificación si hay más contenido
-    text_content = data.get("text", "") or data.get("caption", "")
-    justification_match = JUSTIFICATION_LINK_PATTERN.search(text_content)
-    if justification_match:
-        clean_text = JUSTIFICATION_LINK_PATTERN.sub('', text_content).strip()
-        if clean_text:
-            # Hay más contenido, actualizar
-            if "text" in data:
-                data["text"] = clean_text
-            elif "caption" in data:
-                data["caption"] = clean_text
 
     any_success = False
     for dest in targets:
@@ -749,8 +558,7 @@ for i, (mid, _t, raw) in enumerate(rows):
                 
                 if is_quiz:
                     cid = kwargs.get("correct_option_id", 0)
-                    status = "✅ DETECTADO" if mid in DETECTED_CORRECT_ANSWERS else "⚠️ FALLBACK"
-                    logger.info(f"📊 {status}: Enviando quiz {mid} a {dest} → respuesta {chr(65+cid)}")
+                    logger.info(f"📊 Enviando quiz {mid} a {dest} → respuesta {chr(65+cid)}")
                 
                 coro_factory = lambda k=kwargs: context.bot.send_poll(**k)
                 ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
@@ -766,24 +574,11 @@ for i, (mid, _t, raw) in enumerate(rows):
             )
             ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
             sent_message = msg
-            
-            # Si este mensaje tiene botón de justificación para agregar
-            if ok and sent_message and i in justification_buttons_for_previous:
-                try:
-                    await context.bot.edit_message_reply_markup(
-                        chat_id=dest,
-                        message_id=sent_message.message_id,
-                        reply_markup=justification_buttons_for_previous[i]
-                    )
-                    logger.info(f"✅ Botón de justificación agregado al mensaje {sent_message.message_id}")
-                except Exception as e:
-                    logger.error(f"Error agregando botón: {e}")
 
         if ok:
             any_success = True
             if msg and getattr(msg, "message_id", None):
                 posted_by_target[dest].append(msg.message_id)
-                last_sent_messages[dest] = msg
 
     if any_success:
         publicados += 1
@@ -800,7 +595,7 @@ return publicados, fallidos, posted_by_target
 
 async def publicar(context: ContextTypes.DEFAULT_TYPE, *, targets: List[int], mark_as_sent: bool):
 “”“Envía la cola completa EXCLUYENDO los bloqueados (SCHEDULED_LOCK).”””
-all_rows = get_unsent_drafts(DB_FILE)  # [(message_id, text, raw_json)]
+all_rows = get_unsent_drafts(DB_FILE)
 if not all_rows:
 return 0, 0, {t: [] for t in targets}
 rows = [(m, t, r) for (m, t, r) in all_rows if m not in SCHEDULED_LOCK]
@@ -810,7 +605,6 @@ return await _publicar_rows(context, rows=rows, targets=targets, mark_as_sent=ma
 
 async def publicar_ids(context: ContextTypes.DEFAULT_TYPE, *, ids: List[int],
 targets: List[int], mark_as_sent: bool):
-# Query puntual sin duplicar lógica del módulo database
 import sqlite3
 if not ids:
 return 0, 0, {t: [] for t in targets}
