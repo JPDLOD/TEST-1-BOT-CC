@@ -26,7 +26,6 @@ from database import (
 )
 from keyboards import kb_main, text_main, kb_settings, text_settings
 from publisher import publicar_todo_activos, publicar_ids, get_active_targets, STATS, SCHEDULED_LOCK, set_active_backup, is_active_backup
-# ¡IMPORTAR LOS NUEVOS HANDLERS!
 from publisher import handle_poll_update, handle_poll_answer_update, detect_voted_polls_on_save
 from scheduler import schedule_ids, cmd_programar, cmd_programados, cmd_desprogramar, SCHEDULES
 from core_utils import temp_notice, extract_id_from_text, deep_link_for_channel_message, parse_nuke_selection
@@ -75,603 +74,7 @@ async def _cmd_listar(context: ContextTypes.DEFAULT_TYPE):
         out = ["📋 Borradores pendientes:"]
         for i, (did, snip) in enumerate(drafts, start=1):
             s = (snip or "").strip()
-            if fail:
-                extras.append(f"Fallidos: {fail}")
-            if extras:
-                msg_out += "\n📦 " + " · ".join(extras) + "."
-            await context.bot.send_message(SOURCE_CHAT_ID, msg_out)
-            STATS["cancelados"] = 0
-            STATS["eliminados"] = 0
-        elif data == "m:preview":
-            await _cmd_preview(context)
-        elif data == "m:sched":
-            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-            text = (
-                "⏰ Programar envío de **los borradores actuales**.\n"
-                "Elige un atajo o usa `/programar YYYY-MM-DD HH:MM` (formato 24h: 00:00–23:59, sin '(24h)' ni AM/PM).\n"
-                "⚠️ Si no hay borradores, no se programa nada."
-            )
-            kb = InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("⏳ +5 min", callback_data="s:+5"),
-                     InlineKeyboardButton("⏳ +15 min", callback_data="s:+15")],
-                    [InlineKeyboardButton("🕗 Hoy 20:00", callback_data="s:today20"),
-                     InlineKeyboardButton("🌅 Mañana 07:00", callback_data="s:tom07")],
-                    [InlineKeyboardButton("🗒 Ver programados", callback_data="s:list"),
-                     InlineKeyboardButton("⌫ Cancelar todos", callback_data="s:clear")],
-                    [InlineKeyboardButton("✏️ Custom", callback_data="s:custom"),
-                     InlineKeyboardButton("⬅️ Volver", callback_data="m:back")]
-                ]
-            )
-            await q.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
-        elif data == "m:settings":
-            await q.edit_message_text(text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
-        elif data == "m:toggle_backup":
-            set_active_backup(not is_active_backup())
-            await q.edit_message_text(text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
-        elif data == "m:back":
-            await q.edit_message_text(text_main(), reply_markup=kb_main())
-
-        # Programación rápida
-        elif data.startswith("s:"):
-            now = datetime.now(tz=TZ)
-            when = None
-            if data == "s:+5":
-                when = now + timedelta(minutes=5)
-            elif data == "s:+15":
-                when = now + timedelta(minutes=15)
-            elif data == "s:today20":
-                when = now.replace(hour=20, minute=0, second=0, microsecond=0)
-                if when <= now:
-                    when = when + timedelta(days=1)
-            elif data == "s:tom07":
-                when = (now + timedelta(days=1)).replace(hour=7, minute=0, second=0, microsecond=0)
-            elif data == "s:list":
-                await cmd_programados(context)
-            elif data == "s:clear":
-                await cmd_desprogramar(context, "all")
-            elif data == "s:custom":
-                await q.edit_message_text(
-                    "✏️ Formato manual:\n`/programar YYYY-MM-DD HH:MM` (formato 24h)\n\n⬅️ Usa *Volver* para regresar.",
-                    parse_mode="Markdown"
-                )
-
-            if when:
-                ids = [did for (did, _snip) in list_drafts(DB_FILE)]
-                if not ids:
-                    await temp_notice(context.bot, "🔭 No hay borradores para programar.", ttl=6)
-                else:
-                    await schedule_ids(context, when, ids)
-
-    except Exception as e:
-        logger.exception(f"Error en callback: {e}")
-
-# -------------------------------------------------------
-# Handler principal del canal (BORRADOR)
-# -------------------------------------------------------
-async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.channel_post
-    if not msg:
-        return
-    if msg.chat_id != SOURCE_CHAT_ID:
-        return
-
-    txt = (msg.text or "").strip()
-
-    # --------- COMANDOS ----------
-    if _is_command_text(txt):
-        low = txt.lower()
-
-        if low.startswith("/listar") or low.startswith("/lista"):
-            await _cmd_listar(context)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith(("/cancelar", "/cancel", "/skip")):
-            await _cmd_cancelar(update, context, txt)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith(("/eliminar", "/del", "/delete", "/remove", "/borrar")):
-            await _cmd_eliminar(update, context, txt)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith(("/deshacer", "/undo", "/restaurar")):
-            await _cmd_deshacer(update, context, txt)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/nuke"):
-            await _cmd_nuke(context, txt)
-            await _delete_user_command_if_possible(update, context)
-            return
-        if low.strip() in ("/all", "/todos"):
-            await _cmd_nuke(context, "/nuke all")
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/enviar"):
-            await temp_notice(context.bot, "⏳ Procesando envío…", ttl=4)
-            ok, fail = await publicar_todo_activos(context)
-            extras = []
-            if STATS["cancelados"]:
-                extras.append(f"Cancelados: {STATS['cancelados']}")
-            if STATS["eliminados"]:
-                extras.append(f"Eliminados: {STATS['eliminados']}")
-            msg_out = f"✅ Publicados {ok}."
-            if fail:
-                extras.append(f"Fallidos: {fail}")
-            if extras:
-                msg_out += "\n📦 " + " · ".join(extras) + "."
-            await context.bot.send_message(SOURCE_CHAT_ID, msg_out)
-            STATS["cancelados"] = 0
-            STATS["eliminados"] = 0
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/preview"):
-            await _cmd_preview(context)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/programar"):
-            parts = txt.split(maxsplit=2)
-            if len(parts) >= 3:
-                when_str = f"{parts[1]} {parts[2]}"
-                await cmd_programar(context, when_str)
-            else:
-                await context.bot.send_message(
-                    SOURCE_CHAT_ID,
-                    "Usa: `/programar YYYY-MM-DD HH:MM` (24h: 00:00–23:59, sin '(24h)' ni AM/PM).",
-                    parse_mode="Markdown"
-                )
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/programados"):
-            await cmd_programados(context)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/desprogramar"):
-            parts = txt.split(maxsplit=1)
-            arg = parts[1] if len(parts) > 1 else ""
-            await cmd_desprogramar(context, arg)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/id"):
-            if update.channel_post and update.channel_post.reply_to_message and len((txt or "").split()) == 1:
-                rid = update.channel_post.reply_to_message.message_id
-                await context.bot.send_message(SOURCE_CHAT_ID, f"🆔 ID del mensaje: {rid}")
-            else:
-                mid = extract_id_from_text(txt) or (txt.split()[1] if len(txt.split()) > 1 and txt.split()[1].isdigit() else None)
-                if not mid:
-                    await context.bot.send_message(SOURCE_CHAT_ID, "Usa: /id <id> o responde a un mensaje con /id.")
-                else:
-                    mid = int(mid)
-                    link = deep_link_for_channel_message(SOURCE_CHAT_ID, mid)
-                    await context.bot.send_message(SOURCE_CHAT_ID, f"🆔 {mid}\n• Enlace: {link}")
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith(("/canales", "/targets", "/where")):
-            await context.bot.send_message(SOURCE_CHAT_ID, text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/backup"):
-            parts = txt.split(maxsplit=1)
-            arg = parts[1] if len(parts) > 1 else ""
-            await _cmd_backup(context, arg)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        # ========= COMANDOS DE JUSTIFICACIONES =========
-        if low.startswith("/test_just"):
-            await _cmd_test_justification(update, context, txt)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/just_stats"):
-            await _cmd_justification_stats(update, context)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/debug_just"):
-            await _cmd_debug_justification(update, context)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith(("/comandos", "/comando", "/ayuda", "/start")):
-            await context.bot.send_message(SOURCE_CHAT_ID, text_main(), reply_markup=kb_main())
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        await context.bot.send_message(SOURCE_CHAT_ID, "Comando no reconocido. Usa /comandos.")
-        await _delete_user_command_if_possible(update, context)
-        return
-
-    # --------- NO COMANDO → GUARDAR BORRADOR ----------
-    snippet = msg.text or msg.caption or ""
-    raw_json = json.dumps(msg.to_dict(), ensure_ascii=False)
-    save_draft(DB_FILE, msg.message_id, snippet, raw_json)
-    
-    # ¡NUEVA FUNCIÓN! Detectar si es una encuesta con votos
-    detect_voted_polls_on_save(msg.message_id, raw_json)
-    
-    # ¡NUEVA FUNCIÓN! Log si tiene justificaciones
-    try:
-        from justifications_handler import extract_justification_link
-        text_to_check = msg.text or msg.caption or ""
-        justif_id = extract_justification_link(text_to_check)
-        if justif_id:
-            logger.info(f"🔗 Borrador {msg.message_id}: detectado enlace de justificación → {justif_id}")
-        else:
-            if "ccjustificaciones" in text_to_check.lower():
-                logger.warning(f"⚠️ Mensaje {msg.message_id} contiene 'ccjustificaciones' pero no se detectó: '{text_to_check[:100]}...'")
-    except Exception as e:
-        logger.error(f"Error detectando justificación: {e}")
-    
-    logger.info(f"Guardado en borrador: {msg.message_id}")
-
-# ========= ERROR HANDLER =========
-async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.exception("Excepción no capturada", exc_info=context.error)
-
-# ========= set bot commands (menú de comandos) =========
-async def _set_bot_commands(app: Application):
-    try:
-        await app.bot.set_my_commands([
-            ("comandos", "Ver ayuda y botones"),
-            ("listar", "Mostrar borradores pendientes (excluye programados)"),
-            ("enviar", "Publicar ahora a targets activos"),
-            ("preview", "Enviar cola a PREVIEW (no marca enviada)"),
-            ("programar", "Programar (24h: YYYY-MM-DD HH:MM)"),
-            ("programados", "Ver programaciones pendientes"),
-            ("desprogramar", "Cancelar una programación (id|all)"),
-            ("cancelar", "Quitar de la cola (no borra del canal)"),
-            ("deshacer", "Revertir el último /cancelar"),
-            ("eliminar", "Borrar del canal y de la cola"),
-            ("nuke", "Borrar varios (all | 1,3,5 | 1-10 | N)"),
-            ("id", "Mostrar ID del mensaje"),
-            ("canales", "Ver IDs y estado de targets"),
-            ("backup", "ON/OFF para backup"),
-            ("test_just", "Probar justificación (test_just <id>)"),
-            ("just_stats", "Estadísticas de justificaciones"),
-            ("debug_just", "Debug sistema justificaciones"),
-        ])
-    except Exception:
-        pass
-
-# ========= MAIN =========
-def main():
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
-
-    # ¡AGREGAR LOS NUEVOS HANDLERS PARA DETECTAR VOTOS!
-    app.add_handler(PollHandler(handle_poll_update))
-    app.add_handler(PollAnswerHandler(handle_poll_answer_update))
-    
-    # ¡INTEGRAR SISTEMA DE JUSTIFICACIONES!
-    add_justification_handlers(app)
-    
-    # Handlers existentes
-    app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
-    app.add_handler(CallbackQueryHandler(handle_callback))
-
-    app.add_error_handler(on_error)
-
-    logger.info("🚀 Bot iniciado con DETECCIÓN DE VOTOS + JUSTIFICACIONES PROTEGIDAS! Escuchando channel_post + poll updates + deep-links en el BORRADOR.")
-
-    # set comandos visibles (no afecta al canal si Telegram no los muestra ahí)
-    app.post_init = _set_bot_commands
-
-    app.run_polling(allowed_updates=["channel_post", "callback_query", "poll", "poll_answer", "message"], drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main() extras:
-                msg_out += "\n📦 " + " · ".join(extras) + "."
-            await context.bot.send_message(SOURCE_CHAT_ID, msg_out)
-            STATS["cancelados"] = 0
-            STATS["eliminados"] = 0
-        elif data == "m:preview":
-            await _cmd_preview(context)
-        elif data == "m:sched":
-            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-            text = (
-                "⏰ Programar envío de **los borradores actuales**.\n"
-                "Elige un atajo o usa `/programar YYYY-MM-DD HH:MM` (formato 24h: 00:00–23:59, sin '(24h)' ni AM/PM).\n"
-                "⚠️ Si no hay borradores, no se programa nada."
-            )
-            kb = InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("⏳ +5 min", callback_data="s:+5"),
-                     InlineKeyboardButton("⏳ +15 min", callback_data="s:+15")],
-                    [InlineKeyboardButton("🕗 Hoy 20:00", callback_data="s:today20"),
-                     InlineKeyboardButton("🌅 Mañana 07:00", callback_data="s:tom07")],
-                    [InlineKeyboardButton("🗒 Ver programados", callback_data="s:list"),
-                     InlineKeyboardButton("⌫ Cancelar todos", callback_data="s:clear")],
-                    [InlineKeyboardButton("✏️ Custom", callback_data="s:custom"),
-                     InlineKeyboardButton("⬅️ Volver", callback_data="m:back")]
-                ]
-            )
-            await q.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
-        elif data == "m:settings":
-            await q.edit_message_text(text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
-        elif data == "m:toggle_backup":
-            set_active_backup(not is_active_backup())
-            await q.edit_message_text(text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
-        elif data == "m:back":
-            await q.edit_message_text(text_main(), reply_markup=kb_main())
-
-        # Programación rápida
-        elif data.startswith("s:"):
-            now = datetime.now(tz=TZ)
-            when = None
-            if data == "s:+5":
-                when = now + timedelta(minutes=5)
-            elif data == "s:+15":
-                when = now + timedelta(minutes=15)
-            elif data == "s:today20":
-                when = now.replace(hour=20, minute=0, second=0, microsecond=0)
-                if when <= now:
-                    when = when + timedelta(days=1)
-            elif data == "s:tom07":
-                when = (now + timedelta(days=1)).replace(hour=7, minute=0, second=0, microsecond=0)
-            elif data == "s:list":
-                await cmd_programados(context)
-            elif data == "s:clear":
-                await cmd_desprogramar(context, "all")
-            elif data == "s:custom":
-                await q.edit_message_text(
-                    "✏️ Formato manual:\n`/programar YYYY-MM-DD HH:MM` (formato 24h)\n\n⬅️ Usa *Volver* para regresar.",
-                    parse_mode="Markdown"
-                )
-
-            if when:
-                ids = [did for (did, _snip) in list_drafts(DB_FILE)]
-                if not ids:
-                    await temp_notice(context.bot, "🔭 No hay borradores para programar.", ttl=6)
-                else:
-                    await schedule_ids(context, when, ids)
-
-    except Exception as e:
-        logger.exception(f"Error en callback: {e}")
-
-# -------------------------------------------------------
-# Handler principal del canal (BORRADOR)
-# -------------------------------------------------------
-async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.channel_post
-    if not msg:
-        return
-    if msg.chat_id != SOURCE_CHAT_ID:
-        return
-
-    txt = (msg.text or "").strip()
-
-    # --------- COMANDOS ----------
-    if _is_command_text(txt):
-        low = txt.lower()
-
-        if low.startswith("/listar") or low.startswith("/lista"):
-            await _cmd_listar(context)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith(("/cancelar", "/cancel", "/skip")):
-            await _cmd_cancelar(update, context, txt)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith(("/eliminar", "/del", "/delete", "/remove", "/borrar")):
-            await _cmd_eliminar(update, context, txt)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith(("/deshacer", "/undo", "/restaurar")):
-            await _cmd_deshacer(update, context, txt)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/nuke"):
-            await _cmd_nuke(context, txt)
-            await _delete_user_command_if_possible(update, context)
-            return
-        if low.strip() in ("/all", "/todos"):
-            await _cmd_nuke(context, "/nuke all")
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/enviar"):
-            await temp_notice(context.bot, "⏳ Procesando envío…", ttl=4)
-            ok, fail = await publicar_todo_activos(context)
-            extras = []
-            if STATS["cancelados"]:
-                extras.append(f"Cancelados: {STATS['cancelados']}")
-            if STATS["eliminados"]:
-                extras.append(f"Eliminados: {STATS['eliminados']}")
-            msg_out = f"✅ Publicados {ok}."
-            if fail:
-                extras.append(f"Fallidos: {fail}")
-            if extras:
-                msg_out += "\n📦 " + " · ".join(extras) + "."
-            await context.bot.send_message(SOURCE_CHAT_ID, msg_out)
-            STATS["cancelados"] = 0
-            STATS["eliminados"] = 0
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/preview"):
-            await _cmd_preview(context)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/programar"):
-            parts = txt.split(maxsplit=2)
-            if len(parts) >= 3:
-                when_str = f"{parts[1]} {parts[2]}"
-                await cmd_programar(context, when_str)
-            else:
-                await context.bot.send_message(
-                    SOURCE_CHAT_ID,
-                    "Usa: `/programar YYYY-MM-DD HH:MM` (24h: 00:00–23:59, sin '(24h)' ni AM/PM).",
-                    parse_mode="Markdown"
-                )
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/programados"):
-            await cmd_programados(context)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/desprogramar"):
-            parts = txt.split(maxsplit=1)
-            arg = parts[1] if len(parts) > 1 else ""
-            await cmd_desprogramar(context, arg)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/id"):
-            if update.channel_post and update.channel_post.reply_to_message and len((txt or "").split()) == 1:
-                rid = update.channel_post.reply_to_message.message_id
-                await context.bot.send_message(SOURCE_CHAT_ID, f"🆔 ID del mensaje: {rid}")
-            else:
-                mid = extract_id_from_text(txt) or (txt.split()[1] if len(txt.split()) > 1 and txt.split()[1].isdigit() else None)
-                if not mid:
-                    await context.bot.send_message(SOURCE_CHAT_ID, "Usa: /id <id> o responde a un mensaje con /id.")
-                else:
-                    mid = int(mid)
-                    link = deep_link_for_channel_message(SOURCE_CHAT_ID, mid)
-                    await context.bot.send_message(SOURCE_CHAT_ID, f"🆔 {mid}\n• Enlace: {link}")
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith(("/canales", "/targets", "/where")):
-            await context.bot.send_message(SOURCE_CHAT_ID, text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/backup"):
-            parts = txt.split(maxsplit=1)
-            arg = parts[1] if len(parts) > 1 else ""
-            await _cmd_backup(context, arg)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        # ========= COMANDOS DE JUSTIFICACIONES =========
-        if low.startswith("/test_just"):
-            await _cmd_test_justification(update, context, txt)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/just_stats"):
-            await _cmd_justification_stats(update, context)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith("/debug_just"):
-            await _cmd_debug_justification(update, context)
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        if low.startswith(("/comandos", "/comando", "/ayuda", "/start")):
-            await context.bot.send_message(SOURCE_CHAT_ID, text_main(), reply_markup=kb_main())
-            await _delete_user_command_if_possible(update, context)
-            return
-
-        await context.bot.send_message(SOURCE_CHAT_ID, "Comando no reconocido. Usa /comandos.")
-        await _delete_user_command_if_possible(update, context)
-        return
-
-    # --------- NO COMANDO → GUARDAR BORRADOR ----------
-    snippet = msg.text or msg.caption or ""
-    raw_json = json.dumps(msg.to_dict(), ensure_ascii=False)
-    save_draft(DB_FILE, msg.message_id, snippet, raw_json)
-    
-    # ¡NUEVA FUNCIÓN! Detectar si es una encuesta con votos
-    detect_voted_polls_on_save(msg.message_id, raw_json)
-    
-    # ¡NUEVA FUNCIÓN! Log si tiene justificaciones
-    try:
-        from justifications_handler import extract_justification_link
-        text_to_check = msg.text or msg.caption or ""
-        justif_id = extract_justification_link(text_to_check)
-        if justif_id:
-            logger.info(f"🔗 Borrador {msg.message_id}: detectado enlace de justificación → {justif_id}")
-        else:
-            if "ccjustificaciones" in text_to_check.lower():
-                logger.warning(f"⚠️ Mensaje {msg.message_id} contiene 'ccjustificaciones' pero no se detectó: '{text_to_check[:100]}...'")
-    except Exception as e:
-        logger.error(f"Error detectando justificación: {e}")
-    
-    logger.info(f"Guardado en borrador: {msg.message_id}")
-
-# ========= ERROR HANDLER =========
-async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.exception("Excepción no capturada", exc_info=context.error)
-
-# ========= set bot commands (menú de comandos) =========
-async def _set_bot_commands(app: Application):
-    try:
-        await app.bot.set_my_commands([
-            ("comandos", "Ver ayuda y botones"),
-            ("listar", "Mostrar borradores pendientes (excluye programados)"),
-            ("enviar", "Publicar ahora a targets activos"),
-            ("preview", "Enviar cola a PREVIEW (no marca enviada)"),
-            ("programar", "Programar (24h: YYYY-MM-DD HH:MM)"),
-            ("programados", "Ver programaciones pendientes"),
-            ("desprogramar", "Cancelar una programación (id|all)"),
-            ("cancelar", "Quitar de la cola (no borra del canal)"),
-            ("deshacer", "Revertir el último /cancelar"),
-            ("eliminar", "Borrar del canal y de la cola"),
-            ("nuke", "Borrar varios (all | 1,3,5 | 1-10 | N)"),
-            ("id", "Mostrar ID del mensaje"),
-            ("canales", "Ver IDs y estado de targets"),
-            ("backup", "ON/OFF para backup"),
-            ("test_just", "Probar justificación (test_just <id>)"),
-            ("just_stats", "Estadísticas de justificaciones"),
-            ("debug_just", "Debug sistema justificaciones"),
-        ])
-    except Exception:
-        pass
-
-# ========= MAIN =========
-def main():
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
-
-    # ¡AGREGAR LOS NUEVOS HANDLERS PARA DETECTAR VOTOS!
-    app.add_handler(PollHandler(handle_poll_update))
-    app.add_handler(PollAnswerHandler(handle_poll_answer_update))
-    
-    # ¡INTEGRAR SISTEMA DE JUSTIFICACIONES!
-    add_justification_handlers(app)
-    
-    # Handlers existentes
-    app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
-    app.add_handler(CallbackQueryHandler(handle_callback))
-
-    app.add_error_handler(on_error)
-
-    logger.info("🚀 Bot iniciado con DETECCIÓN DE VOTOS + JUSTIFICACIONES PROTEGIDAS! Escuchando channel_post + poll updates + deep-links en el BORRADOR.")
-
-    # set comandos visibles (no afecta al canal si Telegram no los muestra ahí)
-    app.post_init = _set_bot_commands
-
-    app.run_polling(allowed_updates=["channel_post", "callback_query", "poll", "poll_answer", "message"], drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main() len(s) > 60:
+            if len(s) > 60:
                 s = s[:60] + "…"
             out.append(f"• {i:>2} — {s or '[contenido]'}  (id:{did})")
 
@@ -922,4 +325,301 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg_out = f"✅ Publicados {ok}."
             if fail:
                 extras.append(f"Fallidos: {fail}")
-            if
+            if extras:
+                msg_out += "\n📦 " + " · ".join(extras) + "."
+            await context.bot.send_message(SOURCE_CHAT_ID, msg_out)
+            STATS["cancelados"] = 0
+            STATS["eliminados"] = 0
+        elif data == "m:preview":
+            await _cmd_preview(context)
+        elif data == "m:sched":
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            text = (
+                "⏰ Programar envío de **los borradores actuales**.\n"
+                "Elige un atajo o usa `/programar YYYY-MM-DD HH:MM` (formato 24h: 00:00–23:59, sin '(24h)' ni AM/PM).\n"
+                "⚠️ Si no hay borradores, no se programa nada."
+            )
+            kb = InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("⏳ +5 min", callback_data="s:+5"),
+                     InlineKeyboardButton("⏳ +15 min", callback_data="s:+15")],
+                    [InlineKeyboardButton("🕗 Hoy 20:00", callback_data="s:today20"),
+                     InlineKeyboardButton("🌅 Mañana 07:00", callback_data="s:tom07")],
+                    [InlineKeyboardButton("🗒 Ver programados", callback_data="s:list"),
+                     InlineKeyboardButton("⌫ Cancelar todos", callback_data="s:clear")],
+                    [InlineKeyboardButton("✏️ Custom", callback_data="s:custom"),
+                     InlineKeyboardButton("⬅️ Volver", callback_data="m:back")]
+                ]
+            )
+            await q.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+        elif data == "m:settings":
+            await q.edit_message_text(text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
+        elif data == "m:toggle_backup":
+            set_active_backup(not is_active_backup())
+            await q.edit_message_text(text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
+        elif data == "m:back":
+            await q.edit_message_text(text_main(), reply_markup=kb_main())
+
+        # Programación rápida
+        elif data.startswith("s:"):
+            now = datetime.now(tz=TZ)
+            when = None
+            if data == "s:+5":
+                when = now + timedelta(minutes=5)
+            elif data == "s:+15":
+                when = now + timedelta(minutes=15)
+            elif data == "s:today20":
+                when = now.replace(hour=20, minute=0, second=0, microsecond=0)
+                if when <= now:
+                    when = when + timedelta(days=1)
+            elif data == "s:tom07":
+                when = (now + timedelta(days=1)).replace(hour=7, minute=0, second=0, microsecond=0)
+            elif data == "s:list":
+                await cmd_programados(context)
+            elif data == "s:clear":
+                await cmd_desprogramar(context, "all")
+            elif data == "s:custom":
+                await q.edit_message_text(
+                    "✏️ Formato manual:\n`/programar YYYY-MM-DD HH:MM` (formato 24h)\n\n⬅️ Usa *Volver* para regresar.",
+                    parse_mode="Markdown"
+                )
+
+            if when:
+                ids = [did for (did, _snip) in list_drafts(DB_FILE)]
+                if not ids:
+                    await temp_notice(context.bot, "🔭 No hay borradores para programar.", ttl=6)
+                else:
+                    await schedule_ids(context, when, ids)
+
+    except Exception as e:
+        logger.exception(f"Error en callback: {e}")
+
+# -------------------------------------------------------
+# Handler principal del canal (BORRADOR)
+# -------------------------------------------------------
+async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.channel_post
+    if not msg:
+        return
+    if msg.chat_id != SOURCE_CHAT_ID:
+        return
+
+    txt = (msg.text or "").strip()
+
+    # --------- COMANDOS ----------
+    if _is_command_text(txt):
+        low = txt.lower()
+
+        if low.startswith("/listar") or low.startswith("/lista"):
+            await _cmd_listar(context)
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith(("/cancelar", "/cancel", "/skip")):
+            await _cmd_cancelar(update, context, txt)
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith(("/eliminar", "/del", "/delete", "/remove", "/borrar")):
+            await _cmd_eliminar(update, context, txt)
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith(("/deshacer", "/undo", "/restaurar")):
+            await _cmd_deshacer(update, context, txt)
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith("/nuke"):
+            await _cmd_nuke(context, txt)
+            await _delete_user_command_if_possible(update, context)
+            return
+        if low.strip() in ("/all", "/todos"):
+            await _cmd_nuke(context, "/nuke all")
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith("/enviar"):
+            await temp_notice(context.bot, "⏳ Procesando envío…", ttl=4)
+            ok, fail = await publicar_todo_activos(context)
+            extras = []
+            if STATS["cancelados"]:
+                extras.append(f"Cancelados: {STATS['cancelados']}")
+            if STATS["eliminados"]:
+                extras.append(f"Eliminados: {STATS['eliminados']}")
+            msg_out = f"✅ Publicados {ok}."
+            if fail:
+                extras.append(f"Fallidos: {fail}")
+            if extras:
+                msg_out += "\n📦 " + " · ".join(extras) + "."
+            await context.bot.send_message(SOURCE_CHAT_ID, msg_out)
+            STATS["cancelados"] = 0
+            STATS["eliminados"] = 0
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith("/preview"):
+            await _cmd_preview(context)
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith("/programar"):
+            parts = txt.split(maxsplit=2)
+            if len(parts) >= 3:
+                when_str = f"{parts[1]} {parts[2]}"
+                await cmd_programar(context, when_str)
+            else:
+                await context.bot.send_message(
+                    SOURCE_CHAT_ID,
+                    "Usa: `/programar YYYY-MM-DD HH:MM` (24h: 00:00–23:59, sin '(24h)' ni AM/PM).",
+                    parse_mode="Markdown"
+                )
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith("/programados"):
+            await cmd_programados(context)
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith("/desprogramar"):
+            parts = txt.split(maxsplit=1)
+            arg = parts[1] if len(parts) > 1 else ""
+            await cmd_desprogramar(context, arg)
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith("/id"):
+            if update.channel_post and update.channel_post.reply_to_message and len((txt or "").split()) == 1:
+                rid = update.channel_post.reply_to_message.message_id
+                await context.bot.send_message(SOURCE_CHAT_ID, f"🆔 ID del mensaje: {rid}")
+            else:
+                mid = extract_id_from_text(txt) or (txt.split()[1] if len(txt.split()) > 1 and txt.split()[1].isdigit() else None)
+                if not mid:
+                    await context.bot.send_message(SOURCE_CHAT_ID, "Usa: /id <id> o responde a un mensaje con /id.")
+                else:
+                    mid = int(mid)
+                    link = deep_link_for_channel_message(SOURCE_CHAT_ID, mid)
+                    await context.bot.send_message(SOURCE_CHAT_ID, f"🆔 {mid}\n• Enlace: {link}")
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith(("/canales", "/targets", "/where")):
+            await context.bot.send_message(SOURCE_CHAT_ID, text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith("/backup"):
+            parts = txt.split(maxsplit=1)
+            arg = parts[1] if len(parts) > 1 else ""
+            await _cmd_backup(context, arg)
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        # ========= COMANDOS DE JUSTIFICACIONES =========
+        if low.startswith("/test_just"):
+            await _cmd_test_justification(update, context, txt)
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith("/just_stats"):
+            await _cmd_justification_stats(update, context)
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith("/debug_just"):
+            await _cmd_debug_justification(update, context)
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        if low.startswith(("/comandos", "/comando", "/ayuda", "/start")):
+            await context.bot.send_message(SOURCE_CHAT_ID, text_main(), reply_markup=kb_main())
+            await _delete_user_command_if_possible(update, context)
+            return
+
+        await context.bot.send_message(SOURCE_CHAT_ID, "Comando no reconocido. Usa /comandos.")
+        await _delete_user_command_if_possible(update, context)
+        return
+
+    # --------- NO COMANDO → GUARDAR BORRADOR ----------
+    snippet = msg.text or msg.caption or ""
+    raw_json = json.dumps(msg.to_dict(), ensure_ascii=False)
+    save_draft(DB_FILE, msg.message_id, snippet, raw_json)
+    
+    # ¡NUEVA FUNCIÓN! Detectar si es una encuesta con votos
+    detect_voted_polls_on_save(msg.message_id, raw_json)
+    
+    # ¡NUEVA FUNCIÓN! Log si tiene justificaciones
+    try:
+        from justifications_handler import extract_justification_link
+        text_to_check = msg.text or msg.caption or ""
+        justif_id = extract_justification_link(text_to_check)
+        if justif_id:
+            logger.info(f"🔗 Borrador {msg.message_id}: detectado enlace de justificación → {justif_id}")
+        else:
+            if "ccjustificaciones" in text_to_check.lower():
+                logger.warning(f"⚠️ Mensaje {msg.message_id} contiene 'ccjustificaciones' pero no se detectó: '{text_to_check[:100]}...'")
+    except Exception as e:
+        logger.error(f"Error detectando justificación: {e}")
+    
+    logger.info(f"Guardado en borrador: {msg.message_id}")
+
+# ========= ERROR HANDLER =========
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("Excepción no capturada", exc_info=context.error)
+
+# ========= set bot commands (menú de comandos) =========
+async def _set_bot_commands(app: Application):
+    try:
+        await app.bot.set_my_commands([
+            ("comandos", "Ver ayuda y botones"),
+            ("listar", "Mostrar borradores pendientes (excluye programados)"),
+            ("enviar", "Publicar ahora a targets activos"),
+            ("preview", "Enviar cola a PREVIEW (no marca enviada)"),
+            ("programar", "Programar (24h: YYYY-MM-DD HH:MM)"),
+            ("programados", "Ver programaciones pendientes"),
+            ("desprogramar", "Cancelar una programación (id|all)"),
+            ("cancelar", "Quitar de la cola (no borra del canal)"),
+            ("deshacer", "Revertir el último /cancelar"),
+            ("eliminar", "Borrar del canal y de la cola"),
+            ("nuke", "Borrar varios (all | 1,3,5 | 1-10 | N)"),
+            ("id", "Mostrar ID del mensaje"),
+            ("canales", "Ver IDs y estado de targets"),
+            ("backup", "ON/OFF para backup"),
+            ("test_just", "Probar justificación (test_just <id>)"),
+            ("just_stats", "Estadísticas de justificaciones"),
+            ("debug_just", "Debug sistema justificaciones"),
+        ])
+    except Exception:
+        pass
+
+# ========= MAIN =========
+def main():
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
+
+    # ¡AGREGAR LOS NUEVOS HANDLERS PARA DETECTAR VOTOS!
+    app.add_handler(PollHandler(handle_poll_update))
+    app.add_handler(PollAnswerHandler(handle_poll_answer_update))
+    
+    # ¡INTEGRAR SISTEMA DE JUSTIFICACIONES!
+    add_justification_handlers(app)
+    
+    # Handlers existentes
+    app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+
+    app.add_error_handler(on_error)
+
+    logger.info("🚀 Bot iniciado con DETECCIÓN DE VOTOS + JUSTIFICACIONES PROTEGIDAS!")
+
+    # set comandos visibles
+    app.post_init = _set_bot_commands
+
+    app.run_polling(allowed_updates=["channel_post", "callback_query", "poll", "poll_answer", "message"], drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
