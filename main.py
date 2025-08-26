@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Bot simplificado con todas las mejoras solicitadas
+# Bot simplificado y optimizado - SIN comandos cancelar/eliminar/deshacer
 
 import json
 import logging
@@ -35,30 +35,20 @@ logger.info(
     f"BACKUP={BACKUP_CHAT_ID} (SIEMPRE ON)  PREVIEW={PREVIEW_CHAT_ID}  TZ={TZNAME}"
 )
 
-# -------------------------------------------------------
-# Helpers locales
-# -------------------------------------------------------
+# ========= Helpers =========
 def _is_command_text(txt: Optional[str]) -> bool:
     return bool(txt and txt.strip().startswith("/"))
 
 async def _delete_user_command_if_possible(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Borra el mensaje de comando del canal (si el bot tiene permiso)."""
+    """Borra el mensaje de comando del canal si es posible."""
     try:
         if update and update.channel_post:
             await context.bot.delete_message(chat_id=SOURCE_CHAT_ID, message_id=update.channel_post.message_id)
     except TelegramError:
         pass
 
-def parse_nuke_args(arg: str, drafts_count: int) -> Set[int]:
-    """
-    Parser mejorado para /nuke:
-    - "all" o "todos" -> todos
-    - "last5" o "l5" -> últimos 5
-    - "5" -> solo el mensaje #5
-    - "1,3,5" -> mensajes 1, 3 y 5
-    - "1-5" -> rango del 1 al 5
-    """
-    from typing import Set
+def parse_nuke_args(arg: str) -> Set[int]:
+    """Parser para /nuke - soporta múltiples formatos."""
     arg = arg.strip().lower()
     result: Set[int] = set()
     drafts = list_drafts(DB_FILE)
@@ -71,19 +61,17 @@ def parse_nuke_args(arg: str, drafts_count: int) -> Set[int]:
     if arg in ("all", "todos"):
         return set(ids_in_order)
     
-    # Últimos N (last5, l5, últimos5, u5)
+    # Últimos N
     last_match = re.match(r'^(?:last|l|últimos?|u)(\d+)$', arg)
     if last_match:
         n = int(last_match.group(1))
         return set(ids_in_order[-n:]) if n > 0 else set()
     
-    # Si contiene comas o guiones, es una lista o rango
+    # Lista/rangos
     if ',' in arg or '-' in arg:
-        # Procesar lista/rangos
         parts = arg.replace(' ', '').split(',')
         for part in parts:
             if '-' in part and part.count('-') == 1:
-                # Es un rango
                 try:
                     start, end = map(int, part.split('-'))
                     for pos in range(start, end + 1):
@@ -92,7 +80,6 @@ def parse_nuke_args(arg: str, drafts_count: int) -> Set[int]:
                 except:
                     pass
             else:
-                # Es un número individual
                 try:
                     pos = int(part)
                     if 0 < pos <= len(ids_in_order):
@@ -100,7 +87,7 @@ def parse_nuke_args(arg: str, drafts_count: int) -> Set[int]:
                 except:
                     pass
     else:
-        # Es un número individual
+        # Número individual
         try:
             pos = int(arg)
             if 0 < pos <= len(ids_in_order):
@@ -110,11 +97,9 @@ def parse_nuke_args(arg: str, drafts_count: int) -> Set[int]:
     
     return result
 
-# -------------------------------------------------------
-# Comandos
-# -------------------------------------------------------
+# ========= Comandos =========
 async def _cmd_listar(context: ContextTypes.DEFAULT_TYPE):
-    """Lista borradores (excluyendo programados) y al final muestra programaciones pendientes."""
+    """Lista borradores y programaciones."""
     drafts_all = list_drafts(DB_FILE)
     drafts = [(did, snip) for (did, snip) in drafts_all if did not in SCHEDULED_LOCK]
 
@@ -142,20 +127,13 @@ async def _cmd_listar(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(SOURCE_CHAT_ID, "\n".join(out), parse_mode="Markdown")
 
 async def _cmd_nuke(context: ContextTypes.DEFAULT_TYPE, arg: str):
-    """
-    Comando /nuke mejorado:
-    - /nuke all → borra todos
-    - /nuke 5 → borra el mensaje #5
-    - /nuke last5 → borra los últimos 5
-    - /nuke 1,3,5 → borra posiciones 1, 3 y 5
-    - /nuke 1-5 → borra del 1 al 5
-    """
+    """Comando /nuke mejorado."""
     drafts = list_drafts(DB_FILE)
     if not drafts:
         await context.bot.send_message(SOURCE_CHAT_ID, "No hay pendientes.")
         return
 
-    victims = parse_nuke_args(arg, len(drafts))
+    victims = parse_nuke_args(arg)
     
     if not victims:
         await context.bot.send_message(
@@ -167,13 +145,11 @@ async def _cmd_nuke(context: ContextTypes.DEFAULT_TYPE, arg: str):
     borrados = 0
     import sqlite3
     for mid in sorted(victims, reverse=True):
-        # Intentar borrar del canal
         try:
             await context.bot.delete_message(chat_id=SOURCE_CHAT_ID, message_id=mid)
         except TelegramError as e:
             logger.warning(f"No pude borrar del canal id:{mid} → {e}")
         
-        # Borrar de la DB
         try:
             con = sqlite3.connect(DB_FILE)
             cur = con.cursor()
@@ -183,7 +159,6 @@ async def _cmd_nuke(context: ContextTypes.DEFAULT_TYPE, arg: str):
         except:
             pass
         
-        # Limpiar de locks
         SCHEDULED_LOCK.discard(mid)
         borrados += 1
 
@@ -192,7 +167,7 @@ async def _cmd_nuke(context: ContextTypes.DEFAULT_TYPE, arg: str):
     await context.bot.send_message(SOURCE_CHAT_ID, f"💣 Nuke: {borrados} borrados. Quedan {restantes} en la cola.")
 
 async def _cmd_preview(context: ContextTypes.DEFAULT_TYPE):
-    """Manda la cola a PREVIEW sin marcar como enviada (excluye programados)."""
+    """Manda la cola a PREVIEW sin marcar como enviada."""
     rows_full = get_unsent_drafts(DB_FILE)
     rows = [(m, t, r) for (m, t, r) in rows_full if m not in SCHEDULED_LOCK]
     if not rows:
@@ -202,9 +177,7 @@ async def _cmd_preview(context: ContextTypes.DEFAULT_TYPE):
     pubs, fails, _ = await publicar_ids(context, ids=ids, targets=[PREVIEW_CHAT_ID], mark_as_sent=False)
     await context.bot.send_message(SOURCE_CHAT_ID, f"🧪 Preview: enviados {pubs}, fallidos {fails}.")
 
-# -------------------------------------------------------
-# Menús / botones (callbacks)
-# -------------------------------------------------------
+# ========= UI/Menús =========
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -265,10 +238,9 @@ def text_schedule() -> str:
 
 def text_status() -> str:
     """Muestra el estado actual de los canales."""
-    # Importar el ID del canal de justificaciones si está disponible
     justifications_info = ""
     try:
-        from justifications_handler import JUSTIFICATIONS_CHAT_ID
+        from config import JUSTIFICATIONS_CHAT_ID
         justifications_info = f"• **Justificaciones:** `{JUSTIFICATIONS_CHAT_ID}` 📚\n"
     except ImportError:
         pass
@@ -283,12 +255,12 @@ def text_status() -> str:
     )
 
 def kb_status() -> InlineKeyboardMarkup:
-    """Teclado para el estado con botón volver."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⬅️ Volver", callback_data="m:back")]
     ])
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja los callbacks de botones."""
     q = update.callback_query
     if not q:
         return
@@ -323,38 +295,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await q.edit_message_text(text_status(), reply_markup=kb_status(), parse_mode="Markdown")
             except TelegramError as e:
-                if "Message is not modified" in str(e):
-                    # Si el mensaje ya tiene el mismo contenido, no hacer nada
-                    pass
-                else:
+                if "Message is not modified" not in str(e):
                     raise
         
         elif data == "m:back":
             await q.edit_message_text(text_main(), reply_markup=kb_main(), parse_mode="Markdown")
         
-        # Para compatibilidad con botones antiguos
-        elif data == "m:settings":
-            # Redirigir a status
-            try:
-                await q.edit_message_text(text_status(), reply_markup=kb_status(), parse_mode="Markdown")
-            except TelegramError as e:
-                if "Message is not modified" in str(e):
-                    pass
-                else:
-                    raise
-        
-        elif data == "m:toggle_backup":
-            # Ya no se puede cambiar, solo mostrar estado
-            await q.answer("⚠️ El backup está siempre activo por seguridad", show_alert=True)
-            try:
-                await q.edit_message_text(text_status(), reply_markup=kb_status(), parse_mode="Markdown")
-            except TelegramError:
-                pass
-        
         # Programación rápida
         elif data.startswith("s:"):
             if data == "s:custom":
-                # Agregar botón volver en Custom
                 custom_kb = InlineKeyboardMarkup([[
                     InlineKeyboardButton("⬅️ Volver", callback_data="m:sched")
                 ]])
@@ -371,7 +320,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif data == "s:clear":
                 await cmd_desprogramar(context, "all")
             else:
-                # Atajos de tiempo
                 now = datetime.now(tz=TZ)
                 when = None
                 
@@ -397,19 +345,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "Message is not modified" not in str(e):
             logger.exception(f"Error en callback: {e}")
 
-# -------------------------------------------------------
-# Handler principal del canal (BORRADOR)
-# -------------------------------------------------------
+# ========= Handler principal del canal =========
 async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja mensajes del canal BORRADOR."""
     msg = update.channel_post
-    if not msg:
-        return
-    if msg.chat_id != SOURCE_CHAT_ID:
+    if not msg or msg.chat_id != SOURCE_CHAT_ID:
         return
 
     txt = (msg.text or "").strip()
 
-    # --------- COMANDOS ----------
+    # ========= COMANDOS =========
     if _is_command_text(txt):
         low = txt.lower()
 
@@ -489,14 +434,12 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if low.startswith("/test_just"):
-            # Comando de prueba para justificaciones
             parts = txt.split(maxsplit=1)
             if len(parts) < 2:
                 await context.bot.send_message(SOURCE_CHAT_ID, "Uso: /test_just <id> o /test_just <id1,id2,id3>")
             else:
                 try:
                     from justifications_handler import cmd_test_justification
-                    # Crear un update simulado para el comando
                     await cmd_test_justification(update, context)
                 except ImportError:
                     await context.bot.send_message(SOURCE_CHAT_ID, "❌ Módulo de justificaciones no disponible")
@@ -508,55 +451,37 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        # Si no es un comando conocido
+        # Comando no reconocido
         await context.bot.send_message(SOURCE_CHAT_ID, "Comando no reconocido. Usa /comandos")
         await _delete_user_command_if_possible(update, context)
         return
 
-    # --------- DETECTAR ATAJO @@@ ----------
-    # Si el mensaje contiene @@@ TEXTO | URL, procesarlo
+    # ========= ATAJO @@@ =========
     shortcut_info = parse_shortcut_line(txt)
     if shortcut_info:
-        # Es un atajo de botón
         label = shortcut_info["label"]
         url = shortcut_info["url"]
         
-        # Buscar el último borrador para agregar el botón
         drafts = list_drafts(DB_FILE)
         if drafts:
             last_draft_id = drafts[-1][0]
-            
-            # Agregar el botón (la función clear_buttons ya está en database.py)
             clear_buttons(DB_FILE, last_draft_id)
             add_button(DB_FILE, last_draft_id, label, url)
+            await temp_notice(context.bot, f"✅ Botón '{label}' agregado al último borrador", ttl=5)
             
-            await temp_notice(
-                context.bot, 
-                f"✅ Botón '{label}' agregado al último borrador", 
-                ttl=5
-            )
-            
-            # Borrar este mensaje del canal (no es contenido, es instrucción)
             try:
-                await context.bot.delete_message(
-                    chat_id=SOURCE_CHAT_ID, 
-                    message_id=msg.message_id
-                )
+                await context.bot.delete_message(chat_id=SOURCE_CHAT_ID, message_id=msg.message_id)
             except:
                 pass
         else:
             await temp_notice(context.bot, "⚠️ No hay borradores para agregar el botón", ttl=5)
-        
         return
 
-    # --------- NO ES COMANDO NI ATAJO → GUARDAR BORRADOR ----------
+    # ========= GUARDAR BORRADOR =========
     snippet = msg.text or msg.caption or ""
     raw_json = json.dumps(msg.to_dict(), ensure_ascii=False)
     save_draft(DB_FILE, msg.message_id, snippet, raw_json)
-    
-    # Detectar si es una encuesta con votos
     detect_voted_polls_on_save(msg.message_id, raw_json)
-    
     logger.info(f"Guardado en borrador: {msg.message_id}")
 
 # ========= ERROR HANDLER =========
@@ -577,23 +502,20 @@ async def _set_bot_commands(app: Application):
             ("nuke", "Eliminar mensajes"),
             ("id", "Mostrar ID del mensaje"),
             ("canales", "Ver estado de canales"),
+            ("test_just", "Probar justificación"),
         ])
     except Exception:
         pass
 
 # ========= MAIN =========
 def main():
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
+    app = Application.builder().token(BOT_TOKEN).build()
 
-    # Handlers para detectar votos en encuestas
+    # Handlers para encuestas
     app.add_handler(PollHandler(handle_poll_update))
     app.add_handler(PollAnswerHandler(handle_poll_answer_update))
     
-    # Agregar handlers de justificaciones si el módulo existe
+    # IMPORTANTE: Agregar handlers de justificaciones ANTES del handler principal
     try:
         from justifications_handler import add_justification_handlers
         add_justification_handlers(app)
