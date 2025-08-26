@@ -583,33 +583,78 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
             # Pequeña pausa entre análisis
             await asyncio.sleep(0.3)
     
-    # PROCEDER CON LA PUBLICACIÓN NORMAL
+    # ANÁLISIS PREVIO: Detectar mensajes que son SOLO links de justificación
+    justification_buttons_for_previous = {}  # {message_index: button}
+    messages_to_skip = set()  # Índices de mensajes que NO se deben enviar
+    
+    for i, (mid, _t, raw) in enumerate(rows):
+        try:
+            data = json.loads(raw or "{}")
+            text_content = data.get("text", "") or data.get("caption", "")
+            
+            # Verificar si es un link de justificación
+            justification_match = JUSTIFICATION_LINK_PATTERN.search(text_content)
+            if justification_match:
+                justification_id = int(justification_match.group(1))
+                clean_after_removal = JUSTIFICATION_LINK_PATTERN.sub('', text_content).strip()
+                
+                if not clean_after_removal:
+                    # Es SOLO un link de justificación
+                    logger.info(f"🔗 Mensaje {mid} es SOLO link de justificación #{justification_id}")
+                    
+                    # Buscar el mensaje anterior (generalmente una encuesta)
+                    if i > 0:
+                        # Preparar botón para el mensaje anterior
+                        try:
+                            bot_info = await context.bot.get_me()
+                            bot_username = bot_info.username
+                            deep_link = f"https://t.me/{bot_username}?start=just_{justification_id}"
+                            button = InlineKeyboardMarkup([[
+                                InlineKeyboardButton("Ver justificación 📚", url=deep_link)
+                            ]])
+                            justification_buttons_for_previous[i-1] = button
+                            logger.info(f"📎 Botón de justificación preparado para mensaje anterior (índice {i-1})")
+                        except Exception as e:
+                            logger.error(f"Error preparando botón: {e}")
+                    
+                    # Marcar este mensaje para NO enviarlo
+                    messages_to_skip.add(i)
+        except Exception as e:
+            logger.error(f"Error analizando mensaje {mid}: {e}")
+    
+    # PROCEDER CON LA PUBLICACIÓN
     publicados = 0
     fallidos = 0
     enviados_ids: List[int] = []
     posted_by_target: Dict[int, List[int]] = {t: [] for t in targets}
+    last_sent_messages = {}  # {target: last_message}
 
-    for mid, _t, raw in rows:
+    for i, (mid, _t, raw) in enumerate(rows):
+        # SALTAR mensajes que son solo links de justificación
+        if i in messages_to_skip:
+            logger.info(f"⏭️ Saltando mensaje {mid} (solo link de justificación)")
+            # Marcar como enviado para que no quede pendiente
+            if mark_as_sent:
+                enviados_ids.append(mid)
+            continue
+        
         try:
             data = json.loads(raw or "{}")
         except Exception as e:
             logger.error(f"Error parseando JSON para mensaje {mid}: {e}")
             data = {}
 
-        # PROCESAR JUSTIFICACIONES
-        justification_id = None
+        # Procesar texto para quitar links de justificación si hay más contenido
         text_content = data.get("text", "") or data.get("caption", "")
-        
-        # Detectar si hay un link de justificación
-        justification_info = extract_justification_from_text(text_content)
-        if justification_info:
-            justification_id, clean_text = justification_info
-            # Actualizar el contenido del mensaje sin el link
-            if "text" in data:
-                data["text"] = clean_text
-            elif "caption" in data:
-                data["caption"] = clean_text
-            logger.info(f"🔒 Detectado link de justificación {justification_id} en mensaje {mid}")
+        justification_match = JUSTIFICATION_LINK_PATTERN.search(text_content)
+        if justification_match:
+            clean_text = JUSTIFICATION_LINK_PATTERN.sub('', text_content).strip()
+            if clean_text:
+                # Hay más contenido, actualizar
+                if "text" in data:
+                    data["text"] = clean_text
+                elif "caption" in data:
+                    data["caption"] = clean_text
 
         any_success = False
         for dest in targets:
@@ -620,6 +665,11 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
                     base_kwargs, is_quiz = _poll_payload_from_raw(data, message_id=mid)
                     kwargs = dict(base_kwargs)
                     kwargs["chat_id"] = dest
+                    
+                    # Agregar botón de justificación si corresponde
+                    if i in justification_buttons_for_previous:
+                        kwargs["reply_markup"] = justification_buttons_for_previous[i]
+                        logger.info(f"📎 Agregando botón de justificación a encuesta {mid}")
                     
                     if is_quiz:
                         cid = kwargs.get("correct_option_id", 0)
@@ -634,56 +684,30 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
                     logger.error(f"Error procesando poll {mid}: {e}")
                     ok, msg = False, None
             else:
-                # Para mensajes normales, si tenemos texto limpio, actualizar antes de copiar
-                if justification_info and clean_text is not None:
-                    # Enviar con el texto limpio (sin el link)
-                    if "text" in data and data["text"] == "":
-                        # Si el texto quedó vacío después de quitar el link, no enviar nada de texto
-                        coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
-                            chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
-                        )
-                    else:
-                        # Enviar con el texto limpio
-                        coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
-                            chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
-                        )
-                else:
-                    coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
-                        chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
-                    )
+                # Mensaje normal
+                coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
+                    chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
+                )
                 ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
                 sent_message = msg
+                
+                # Si este mensaje tiene botón de justificación para agregar
+                if ok and sent_message and i in justification_buttons_for_previous:
+                    try:
+                        await context.bot.edit_message_reply_markup(
+                            chat_id=dest,
+                            message_id=sent_message.message_id,
+                            reply_markup=justification_buttons_for_previous[i]
+                        )
+                        logger.info(f"✅ Botón de justificación agregado al mensaje {sent_message.message_id}")
+                    except Exception as e:
+                        logger.error(f"Error agregando botón: {e}")
 
             if ok:
                 any_success = True
                 if msg and getattr(msg, "message_id", None):
                     posted_by_target[dest].append(msg.message_id)
-                    
-                    # Si hay justificación, agregar el botón al mensaje enviado
-                    if justification_id and sent_message:
-                        try:
-                            # Obtener el username del bot
-                            bot_info = await context.bot.get_me()
-                            bot_username = bot_info.username
-                            
-                            # Crear deep-link para la justificación
-                            deep_link = f"https://t.me/{bot_username}?start=just_{justification_id}"
-                            
-                            # Crear botón
-                            keyboard = InlineKeyboardMarkup([[
-                                InlineKeyboardButton("Ver justificación 🔒", url=deep_link)
-                            ]])
-                            
-                            # Agregar el botón al mensaje enviado
-                            await context.bot.edit_message_reply_markup(
-                                chat_id=dest,
-                                message_id=sent_message.message_id,
-                                reply_markup=keyboard
-                            )
-                            
-                            logger.info(f"✅ Botón de justificación agregado al mensaje {sent_message.message_id}")
-                        except Exception as e:
-                            logger.error(f"Error agregando botón de justificación: {e}")
+                    last_sent_messages[dest] = msg
 
         if any_success:
             publicados += 1
