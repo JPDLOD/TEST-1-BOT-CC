@@ -6,6 +6,7 @@ import asyncio
 
 from telegram.error import RetryAfter, TimedOut, NetworkError, TelegramError
 from telegram.ext import ContextTypes
+from telegram import InlineKeyboardMarkup
 
 from config import DB_FILE, SOURCE_CHAT_ID, TARGET_CHAT_ID, BACKUP_CHAT_ID, PAUSE
 from database import get_unsent_drafts, mark_sent
@@ -45,7 +46,6 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
         try:
             msg = await func_coro_factory()
             # pausa corta entre mensajes
-            import asyncio
             await asyncio.sleep(max(0.0, base_pause))
             return True, msg
         except RetryAfter as e:
@@ -55,21 +55,21 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
                 m = re.search(r"Retry in (\d+)", str(e))
                 wait = int(m.group(1)) if m else 3
             logger.warning(f"RetryAfter: esperando {wait}s …")
-            import asyncio
-            await asyncio.sleep(wait + 1.0);  tries += 1
+            await asyncio.sleep(wait + 1.0)
+            tries += 1
         except TimedOut:
             logger.warning("TimedOut: esperando 3s …")
-            import asyncio
-            await asyncio.sleep(3.0);  tries += 1
+            await asyncio.sleep(3.0)
+            tries += 1
         except NetworkError:
             logger.warning("NetworkError: esperando 3s …")
-            import asyncio
-            await asyncio.sleep(3.0);  tries += 1
+            await asyncio.sleep(3.0)
+            tries += 1
         except TelegramError as e:
             if "Flood control exceeded" in str(e):
                 logger.warning("Flood control… esperando 5s …")
-                import asyncio
-                await asyncio.sleep(5.0);  tries += 1
+                await asyncio.sleep(5.0)
+                tries += 1
             else:
                 logger.error(f"TelegramError no recuperable: {e}")
                 return False, None
@@ -302,60 +302,6 @@ def extract_correct_answer_from_json_deep_analysis(poll_data: dict, message_id: 
                     logger.info(f"✅ MÉTODO 2: Opción {i} ({chr(65+i)}) tiene {voter_count} voto(s)")
                     return i
         
-        # Método 3: Buscar en results/poll_results
-        for results_key in ["results", "poll_results"]:
-            if results_key in poll_data:
-                results = poll_data[results_key]
-                if isinstance(results, dict) and "results" in results:
-                    results_list = results["results"]
-                    for i, result in enumerate(results_list):
-                        if isinstance(result, dict):
-                            if result.get("correct", False):
-                                logger.info(f"✅ MÉTODO 3: Opción {i} marcada como 'correct' en {results_key}")
-                                return i
-                            elif result.get("voter_count", 0) > 0:
-                                logger.info(f"✅ MÉTODO 3: Opción {i} tiene votos en {results_key}")
-                                return i
-        
-        # Método 4: Buscar recursivamente cualquier campo que contenga "correct"
-        def buscar_correct_recursivo(obj, path=""):
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    current_path = f"{path}.{key}" if path else key
-                    
-                    if key == "correct" and value is True:
-                        logger.info(f"🔍 MÉTODO 4: Encontrado 'correct': True en {current_path}")
-                        return True
-                    elif key == "correct_option_id" and value is not None:
-                        logger.info(f"🔍 MÉTODO 4: Encontrado correct_option_id = {value} en {current_path}")
-                        try:
-                            return int(value)
-                        except (ValueError, TypeError):
-                            pass
-                    
-                    result = buscar_correct_recursivo(value, current_path)
-                    if result is not None:
-                        return result
-            
-            elif isinstance(obj, list):
-                for i, item in enumerate(obj):
-                    current_path = f"{path}[{i}]"
-                    result = buscar_correct_recursivo(item, current_path)
-                    if result is not None:
-                        return result
-            
-            return None
-        
-        resultado_recursivo = buscar_correct_recursivo(poll_data)
-        if resultado_recursivo is not None:
-            logger.info(f"✅ MÉTODO 4: Búsqueda recursiva encontró: {resultado_recursivo}")
-            if isinstance(resultado_recursivo, int):
-                return resultado_recursivo
-        
-        # Método 5: Log completo del JSON para debugging manual
-        logger.warning(f"⚠️ ANÁLISIS EXHAUSTIVO: No se encontró respuesta correcta en quiz {message_id}")
-        logger.debug(f"📄 JSON completo del poll: {json.dumps(poll_data, indent=2, default=str)}")
-        
         return None
         
     except Exception as e:
@@ -458,13 +404,7 @@ async def get_correct_answer_comprehensive(context: ContextTypes.DEFAULT_TYPE, m
         logger.info(f"🚫 Quiz {message_id}: saltando stopPoll (mensaje forwardeado)")
     
     # FALLBACK: Si todo falla
-    if is_forwarded:
-        logger.error(f"❌ FALLO FORWARDED: Quiz {message_id} - No se pudo detectar respuesta correcta (mensaje forwardeado)")
-        logger.warning(f"💡 SUGERENCIA: Para mensajes forwardeados, asegúrate de que tengan votos o explanation con pistas")
-    else:
-        logger.error(f"❌ FALLO DIRECTO: Quiz {message_id} - No se pudo detectar respuesta correcta (mensaje directo)")
-        logger.warning(f"💡 SUGERENCIA: Vota en la encuesta o verifica permisos del bot")
-    
+    logger.error(f"❌ No se pudo detectar respuesta correcta para quiz {message_id}")
     return 0  # Fallback a A
 
 def get_correct_answer_sync(message_id: int, poll_data: dict) -> int:
@@ -530,7 +470,32 @@ def _poll_payload_from_raw(raw: dict, message_id: int = None):
 
     return kwargs, is_quiz
 
-# ========= Publicadores =========
+# ========= NUEVA INTEGRACIÓN: PROCESAR JUSTIFICACIONES =========
+async def process_message_for_justifications(context: ContextTypes.DEFAULT_TYPE, raw_json: str) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
+    """
+    FUNCIÓN CRÍTICA: Procesa un mensaje para detectar y manejar justificaciones.
+    """
+    try:
+        from justifications_handler import process_draft_for_justifications
+        logger.info(f"🔗 Procesando mensaje para justificaciones...")
+        
+        modified_json, justification_keyboard = await process_draft_for_justifications(context, raw_json)
+        
+        if justification_keyboard:
+            logger.info(f"✅ JUSTIFICACIÓN DETECTADA: botón creado")
+        else:
+            logger.info(f"ℹ️ No se detectaron justificaciones en el mensaje")
+            
+        return modified_json, justification_keyboard
+        
+    except ImportError as e:
+        logger.error(f"❌ Error importando justifications_handler: {e}")
+        return raw_json, None
+    except Exception as e:
+        logger.error(f"❌ Error procesando justificaciones: {e}")
+        return raw_json, None
+
+# ========= Publicadores CON INTEGRACIÓN DE JUSTIFICACIONES =========
 async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple[int, str, str]],
                          targets: List[int], mark_as_sent: bool) -> Tuple[int, int, Dict[int, List[int]]]:
     
@@ -560,7 +525,7 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
             # Pequeña pausa entre análisis
             await asyncio.sleep(0.3)
     
-    # PROCEDER CON LA PUBLICACIÓN NORMAL
+    # PROCEDER CON LA PUBLICACIÓN NORMAL CON JUSTIFICACIONES
     publicados = 0
     fallidos = 0
     enviados_ids: List[int] = []
@@ -573,6 +538,29 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
             logger.error(f"Error parseando JSON para mensaje {mid}: {e}")
             data = {}
 
+        # ========= NUEVA INTEGRACIÓN: PROCESAR JUSTIFICACIONES =========
+        justification_keyboard = None
+        try:
+            logger.info(f"🔍 Procesando justificaciones para mensaje {mid}")
+            
+            # Procesar el mensaje para detectar justificaciones
+            modified_raw, justification_keyboard = await process_message_for_justifications(context, raw)
+            
+            if justification_keyboard:
+                logger.info(f"🔗 Mensaje {mid}: detectada justificación, botón añadido")
+                # Usar el JSON modificado (sin el enlace de justificación)
+                try:
+                    data = json.loads(modified_raw)
+                    logger.info(f"✅ JSON modificado aplicado para mensaje {mid}")
+                except Exception as e:
+                    logger.error(f"❌ Error parseando JSON modificado: {e}")
+            else:
+                logger.info(f"ℹ️ Mensaje {mid}: sin justificaciones")
+            
+        except Exception as e:
+            logger.error(f"❌ Error procesando justificaciones para {mid}: {e}")
+            # Continuar sin justificación si hay error
+
         any_success = False
         for dest in targets:
             if "poll" in data:
@@ -580,6 +568,11 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
                     base_kwargs, is_quiz = _poll_payload_from_raw(data, message_id=mid)
                     kwargs = dict(base_kwargs)
                     kwargs["chat_id"] = dest
+                    
+                    # Agregar botón de justificación si existe
+                    if justification_keyboard:
+                        kwargs["reply_markup"] = justification_keyboard
+                        logger.info(f"🔗 Botón de justificación agregado a encuesta {mid}")
                     
                     if is_quiz:
                         cid = kwargs.get("correct_option_id", 0)
@@ -593,9 +586,29 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
                     logger.error(f"Error procesando poll {mid}: {e}")
                     ok, msg = False, None
             else:
-                coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
-                    chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
-                )
+                # Para mensajes normales, usar copy_message
+                async def send_normal_message():
+                    copied_msg = await context.bot.copy_message(
+                        chat_id=dest, 
+                        from_chat_id=SOURCE_CHAT_ID, 
+                        message_id=mid
+                    )
+                    
+                    # Si hay botón de justificación, editarlo para agregarlo
+                    if justification_keyboard and copied_msg:
+                        try:
+                            await context.bot.edit_message_reply_markup(
+                                chat_id=dest,
+                                message_id=copied_msg.message_id,
+                                reply_markup=justification_keyboard
+                            )
+                            logger.info(f"🔗 Botón de justificación agregado a mensaje copiado {copied_msg.message_id}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ No se pudo agregar botón de justificación: {e}")
+                    
+                    return copied_msg
+                
+                coro_factory = send_normal_message
                 ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
 
             if ok:
@@ -615,32 +628,4 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
 
     return publicados, fallidos, posted_by_target
 
-async def publicar(context: ContextTypes.DEFAULT_TYPE, *, targets: List[int], mark_as_sent: bool):
-    """Envía la cola completa EXCLUYENDO los bloqueados (SCHEDULED_LOCK)."""
-    all_rows = get_unsent_drafts(DB_FILE)  # [(message_id, text, raw_json)]
-    if not all_rows:
-        return 0, 0, {t: [] for t in targets}
-    rows = [(m, t, r) for (m, t, r) in all_rows if m not in SCHEDULED_LOCK]
-    if not rows:
-        return 0, 0, {t: [] for t in targets}
-    return await _publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
-
-async def publicar_ids(context: ContextTypes.DEFAULT_TYPE, *, ids: List[int],
-                       targets: List[int], mark_as_sent: bool):
-    # Query puntual sin duplicar lógica del módulo database
-    import sqlite3
-    if not ids:
-        return 0, 0, {t: [] for t in targets}
-    placeholders = ",".join("?" for _ in ids)
-    sql = f"SELECT message_id, snippet, raw_json FROM drafts WHERE sent=0 AND deleted=0 AND message_id IN ({placeholders}) ORDER BY message_id ASC"
-    con = sqlite3.connect(DB_FILE)
-    cur = con.cursor()
-    rows = list(cur.execute(sql, ids).fetchall())
-    con.close()
-    if not rows:
-        return 0, 0, {t: [] for t in targets}
-    return await _publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
-
-async def publicar_todo_activos(context: ContextTypes.DEFAULT_TYPE):
-    pubs, fails, _ = await publicar(context, targets=get_active_targets(), mark_as_sent=True)
-    return pubs, fails
+async
