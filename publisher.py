@@ -202,66 +202,67 @@ def detect_voted_polls_on_save(message_id: int, raw_json: str):
     except Exception as e:
         logger.error(f"Error analizando poll en save: {e}")
 
-async def extract_correct_answer_via_stop_poll(context: ContextTypes.DEFAULT_TYPE, message_id: int, is_forwarded: bool = False) -> Optional[int]:
+async def extract_correct_answer_via_stop_poll(context: ContextTypes.DEFAULT_TYPE, message_id: int, is_forwarded: bool = False, raw_data: dict = None) -> Optional[int]:
     """
-    MÉTODO DEFINITIVO: Usa stopPoll para cerrar la encuesta y obtener correct_option_id.
-    Solo funciona para mensajes NO forwardeados.
+    MÉTODO MEJORADO: Intenta stopPoll en canal origen si es reenviado.
     """
     
-    if is_forwarded:
-        logger.warning(f"🚫 Quiz {message_id} es FORWARDEADO - skipPoll no funcionará, saltando stopPoll")
-        return None
-    
-    try:
-        logger.info(f"🛑 EJECUTANDO stopPoll en quiz {message_id} para obtener correct_option_id...")
+    # Si es forwardeado, intentar en el canal origen
+    if is_forwarded and raw_data:
+        forward_from_chat_id = raw_data.get("forward_from_chat", {}).get("id")
+        forward_from_message_id = raw_data.get("forward_from_message_id")
         
-        # Hacer stopPoll para cerrar la encuesta
-        stopped_poll = await context.bot.stop_poll(
-            chat_id=SOURCE_CHAT_ID, 
-            message_id=message_id
-        )
-        
-        if not stopped_poll:
-            logger.error(f"❌ stopPoll no devolvió resultado para {message_id}")
-            return None
-        
-        logger.info(f"🔍 stopPoll exitoso en {message_id}")
-        logger.info(f"📊 Poll cerrado: id={stopped_poll.id}, tipo={stopped_poll.type}, cerrado={stopped_poll.is_closed}")
-        
-        # CLAVE: Ahora que está cerrado, correct_option_id debe estar disponible
-        if hasattr(stopped_poll, 'correct_option_id') and stopped_poll.correct_option_id is not None:
-            correct_id = stopped_poll.correct_option_id
-            logger.info(f"🎯 ¡ENCONTRADO! correct_option_id = {correct_id} ({chr(65+correct_id)}) en quiz {message_id}")
-            DETECTED_CORRECT_ANSWERS[message_id] = correct_id
-            return correct_id
-        else:
-            logger.warning(f"⚠️ Poll cerrado pero correct_option_id aún no disponible en {message_id}")
-            
-            # PLAN B: Analizar opciones por patrones
-            if hasattr(stopped_poll, 'options') and stopped_poll.options:
-                logger.info(f"📋 Opciones disponibles: {len(stopped_poll.options)} opciones")
-                for i, option in enumerate(stopped_poll.options):
-                    logger.info(f"   {i}: '{option.text}' (votos: {option.voter_count})")
+        if forward_from_chat_id and forward_from_message_id:
+            try:
+                logger.info(f"🔄 Mensaje reenviado detectado. Intentando stopPoll en canal origen {forward_from_chat_id}")
+                
+                # Intentar stopPoll en el canal origen
+                stopped_poll = await context.bot.stop_poll(
+                    chat_id=forward_from_chat_id,
+                    message_id=forward_from_message_id
+                )
+                
+                if stopped_poll and hasattr(stopped_poll, 'correct_option_id') and stopped_poll.correct_option_id is not None:
+                    correct_id = stopped_poll.correct_option_id
+                    logger.info(f"✅ StopPoll en origen exitoso! correct_option_id = {correct_id}")
+                    DETECTED_CORRECT_ANSWERS[message_id] = correct_id
+                    return correct_id
                     
-                    # Detectar qué opción tiene votos (tu voto)
+            except TelegramError as e:
+                logger.warning(f"⚠️ No se pudo hacer stopPoll en canal origen: {e}")
+    
+    # Si no es forwarded o falló en origen, intentar en el canal actual
+    if not is_forwarded:
+        try:
+            logger.info(f"🛑 EJECUTANDO stopPoll en quiz {message_id} (mensaje directo)...")
+            
+            stopped_poll = await context.bot.stop_poll(
+                chat_id=SOURCE_CHAT_ID, 
+                message_id=message_id
+            )
+            
+            if not stopped_poll:
+                logger.error(f"❌ stopPoll no devolvió resultado para {message_id}")
+                return None
+            
+            if hasattr(stopped_poll, 'correct_option_id') and stopped_poll.correct_option_id is not None:
+                correct_id = stopped_poll.correct_option_id
+                logger.info(f"🎯 ¡ENCONTRADO! correct_option_id = {correct_id}")
+                DETECTED_CORRECT_ANSWERS[message_id] = correct_id
+                return correct_id
+            
+            # Analizar opciones por votos
+            if hasattr(stopped_poll, 'options') and stopped_poll.options:
+                for i, option in enumerate(stopped_poll.options):
                     if option.voter_count > 0:
-                        logger.info(f"🗳️ DETECTADO: Tu voto está en opción {i} ({chr(65+i)})")
+                        logger.info(f"🗳️ Tu voto detectado en opción {i}")
                         DETECTED_CORRECT_ANSWERS[message_id] = i
                         return i
         
-        return None
-        
-    except TelegramError as e:
-        if "poll can't be stopped" in str(e).lower():
-            logger.warning(f"⚠️ Poll {message_id} no se puede cerrar (confirmado: es forwarded o no tienes permisos)")
-        elif "message not found" in str(e).lower():
-            logger.warning(f"⚠️ Poll {message_id} no encontrado para stopPoll")
-        else:
-            logger.error(f"❌ Error en stopPoll para {message_id}: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Error general en stopPoll para {message_id}: {e}")
-        return None
+        except TelegramError as e:
+            logger.error(f"❌ Error en stopPoll: {e}")
+    
+    return None
 
 def extract_correct_answer_from_forwarded_poll_analysis(poll_data: dict, message_id: int) -> Optional[int]:
     """
@@ -476,8 +477,7 @@ async def handle_poll_answer_update(update, context):
 
 async def get_correct_answer_comprehensive(context: ContextTypes.DEFAULT_TYPE, message_id: int, poll_data: dict, raw_message_data: dict = None) -> int:
     """
-    MÉTODO INTEGRAL que usa TODOS los enfoques posibles para detectar la respuesta correcta.
-    Ahora con soporte específico para mensajes forwardeados.
+    MÉTODO INTEGRAL mejorado con soporte para mensajes reenviados.
     """
     
     # Verificar cache primero
@@ -499,30 +499,24 @@ async def get_correct_answer_comprehensive(context: ContextTypes.DEFAULT_TYPE, m
         DETECTED_CORRECT_ANSWERS[message_id] = json_result
         return json_result
     
-    # ENFOQUE 2: Análisis específico para forwardeados (antes de stopPoll)
+    # ENFOQUE 2: stopPoll (ahora también funciona para forwardeados)
+    stop_poll_result = await extract_correct_answer_via_stop_poll(
+        context, message_id, is_forwarded, raw_message_data
+    )
+    if stop_poll_result is not None:
+        return stop_poll_result
+    
+    # ENFOQUE 3: Análisis específico para forwardeados
     if is_forwarded:
-        logger.info(f"🔍 Quiz {message_id}: aplicando análisis específico para FORWARDEADOS...")
+        logger.info(f"🔍 Quiz {message_id}: aplicando análisis adicional para FORWARDEADOS...")
         forwarded_result = extract_correct_answer_from_forwarded_poll_analysis(poll_data, message_id)
         if forwarded_result is not None:
             DETECTED_CORRECT_ANSWERS[message_id] = forwarded_result
             return forwarded_result
     
-    # ENFOQUE 3: stopPoll (solo para mensajes NO forwardeados)
-    if not is_forwarded:
-        logger.info(f"🛑 Quiz {message_id}: intentando stopPoll (mensaje directo)...")
-        stop_poll_result = await extract_correct_answer_via_stop_poll(context, message_id, is_forwarded)
-        if stop_poll_result is not None:
-            return stop_poll_result
-    else:
-        logger.info(f"🚫 Quiz {message_id}: saltando stopPoll (mensaje forwardeado)")
-    
     # FALLBACK: Si todo falla
-    if is_forwarded:
-        logger.error(f"❌ FALLO FORWARDED: Quiz {message_id} - No se pudo detectar respuesta correcta (mensaje forwardeado)")
-        logger.warning(f"💡 SUGERENCIA: Para mensajes forwardeados, asegúrate de que tengan votos o explanation con pistas")
-    else:
-        logger.error(f"❌ FALLO DIRECTO: Quiz {message_id} - No se pudo detectar respuesta correcta (mensaje directo)")
-        logger.warning(f"💡 SUGERENCIA: Vota en la encuesta o verifica permisos del bot")
+    logger.error(f"❌ FALLO: Quiz {message_id} - No se pudo detectar respuesta correcta")
+    logger.warning(f"💡 TIP: Vota en la encuesta antes de reenviarla al borrador")
     
     return 0  # Fallback a A
 
