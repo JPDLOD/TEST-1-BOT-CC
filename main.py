@@ -3,9 +3,11 @@
 # Guarda todo lo que publiques en BORRADOR y, al usar /enviar o /programar,
 # lo publica en PRINCIPAL (y BACKUP si está ON) en el MISMO ORDEN, sin "Forwarded from...".
 # Reconstruye encuestas (quiz/regular) y copia el resto de mensajes.
+# ¡AHORA CON SISTEMA DE JUSTIFICACIONES INTEGRADO!
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -28,6 +30,9 @@ from publisher import handle_poll_update, handle_poll_answer_update
 from scheduler import schedule_ids, cmd_programar, cmd_programados, cmd_desprogramar, SCHEDULES
 from core_utils import temp_notice, extract_id_from_text, deep_link_for_channel_message, parse_nuke_selection
 
+# ¡NUEVA IMPORTACIÓN: SISTEMA DE JUSTIFICACIONES!
+from justifications_handler import add_justification_handlers
+
 # ========= LOGGING =========
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,6 +43,12 @@ logger.info(
     f"SQLite listo. BORRADOR={SOURCE_CHAT_ID}  PRINCIPAL={TARGET_CHAT_ID}  "
     f"PREVIEW={PREVIEW_CHAT_ID}  TZ={TZNAME}"
 )
+
+# Configuración de justificaciones desde ENV
+JUSTIFICATIONS_CHAT_ID = int(os.environ.get("JUSTIFICATIONS_CHAT_ID", "-1003058530208"))
+AUTO_DELETE_MINUTES = int(os.environ.get("AUTO_DELETE_MINUTES", "10"))
+
+logger.info(f"🔐 Justificaciones: Canal={JUSTIFICATIONS_CHAT_ID}, Auto-delete={AUTO_DELETE_MINUTES}min")
 
 # -------------------------------------------------------
 # Helpers locales
@@ -179,7 +190,7 @@ async def _cmd_backup(context: ContextTypes.DEFAULT_TYPE, arg: str):
     await context.bot.send_message(SOURCE_CHAT_ID, text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
 
 # -------------------------------------------------------
-# Comandos adicionales
+# Comandos adicionales (incluye justificaciones)
 # -------------------------------------------------------
 async def _cmd_test_justification(update: Update, context: ContextTypes.DEFAULT_TYPE, txt: str):
     """Comando para probar justificaciones. Uso: /test_just <message_id>"""
@@ -192,21 +203,27 @@ async def _cmd_test_justification(update: Update, context: ContextTypes.DEFAULT_
         message_id = int(parts[1])
         user_id = update.channel_post.from_user.id if update.channel_post and update.channel_post.from_user else 123456789
         
-        # Importar la función aquí para evitar importaciones circulares
-        try:
-            from justifications_handler import send_protected_justification
-            success = await send_protected_justification(context, user_id, message_id)
-            
-            if success:
-                await context.bot.send_message(SOURCE_CHAT_ID, f"✅ Justificación {message_id} enviada como prueba")
-            else:
-                await context.bot.send_message(SOURCE_CHAT_ID, f"❌ Error enviando justificación {message_id}")
-        except ImportError:
-            await context.bot.send_message(SOURCE_CHAT_ID, "❌ Módulo de justificaciones no encontrado")
+        # Importar la función de justificaciones
+        from justifications_handler import send_protected_justification
+        success = await send_protected_justification(context, user_id, message_id)
+        
+        if success:
+            await context.bot.send_message(SOURCE_CHAT_ID, f"✅ Justificación {message_id} enviada como prueba")
+        else:
+            await context.bot.send_message(SOURCE_CHAT_ID, f"❌ Error enviando justificación {message_id}")
     
     except ValueError:
         await context.bot.send_message(SOURCE_CHAT_ID, "❌ ID inválido")
+    except ImportError:
+        await context.bot.send_message(SOURCE_CHAT_ID, "❌ Módulo de justificaciones no encontrado")
 
+async def _cmd_justification_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Muestra estadísticas de justificaciones."""
+    try:
+        from justifications_handler import cmd_justification_stats
+        await cmd_justification_stats(update, context)
+    except ImportError:
+        await context.bot.send_message(SOURCE_CHAT_ID, "❌ Módulo de justificaciones no encontrado")
 
 async def _cmd_nuke(context: ContextTypes.DEFAULT_TYPE, txt: str):
     parts = (txt or "").split(maxsplit=1)
@@ -449,8 +466,13 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _cmd_backup(context, arg)
             await _delete_user_command_if_possible(update, context);  return
 
+        # ========= COMANDOS DE JUSTIFICACIONES =========
         if low.startswith("/test_just"):
             await _cmd_test_justification(update, context, txt)
+            await _delete_user_command_if_possible(update, context);  return
+
+        if low.startswith("/just_stats"):
+            await _cmd_justification_stats(update, context)
             await _delete_user_command_if_possible(update, context);  return
 
         if low.startswith(("/comandos", "/comando", "/ayuda", "/start")):
@@ -469,6 +491,16 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ¡NUEVA FUNCIÓN! Detectar si es una encuesta con votos
     from publisher import detect_voted_polls_on_save
     detect_voted_polls_on_save(msg.message_id, raw_json)
+    
+    # ¡NUEVA FUNCIÓN! Log si tiene justificaciones
+    try:
+        from justifications_handler import extract_justification_link
+        text_to_check = msg.text or msg.caption or ""
+        justif_id = extract_justification_link(text_to_check)
+        if justif_id:
+            logger.info(f"🔗 Borrador {msg.message_id}: detectado enlace de justificación → {justif_id}")
+    except Exception as e:
+        logger.debug(f"Error detectando justificación: {e}")
     
     logger.info(f"Guardado en borrador: {msg.message_id}")
 
@@ -494,6 +526,8 @@ async def _set_bot_commands(app: Application):
             ("id", "Mostrar ID del mensaje"),
             ("canales", "Ver IDs y estado de targets"),
             ("backup", "ON/OFF para backup"),
+            ("test_just", "Probar justificación (test_just <id>)"),
+            ("just_stats", "Estadísticas de justificaciones"),
         ])
     except Exception:
         pass
@@ -510,18 +544,21 @@ def main():
     app.add_handler(PollHandler(handle_poll_update))
     app.add_handler(PollAnswerHandler(handle_poll_answer_update))
     
+    # ¡INTEGRAR SISTEMA DE JUSTIFICACIONES!
+    add_justification_handlers(app)
+    
     # Handlers existentes
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     app.add_error_handler(on_error)
 
-    logger.info("🚀 Bot iniciado con DETECCIÓN DE VOTOS! Escuchando channel_post + poll updates en el BORRADOR.")
+    logger.info("🚀 Bot iniciado con DETECCIÓN DE VOTOS + JUSTIFICACIONES PROTEGIDAS! Escuchando channel_post + poll updates + deep-links en el BORRADOR.")
 
     # set comandos visibles (no afecta al canal si Telegram no los muestra ahí)
     app.post_init = _set_bot_commands
 
-    app.run_polling(allowed_updates=["channel_post", "callback_query", "poll", "poll_answer"], drop_pending_updates=True)
+    app.run_polling(allowed_updates=["channel_post", "callback_query", "poll", "poll_answer", "message"], drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
