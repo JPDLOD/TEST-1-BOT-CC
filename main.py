@@ -19,22 +19,15 @@ from config import (
 )
 from database import (
     init_db, save_draft, get_unsent_drafts, list_drafts,
-    mark_deleted, restore_draft, get_last_deleted, add_button, clear_buttons
+    mark_deleted, restore_draft, get_last_deleted
 )
 from keyboards import kb_main, text_main, kb_settings, text_settings
 from publisher import publicar_todo_activos, publicar_ids, get_active_targets, STATS, SCHEDULED_LOCK, set_active_backup, is_active_backup
-from publisher import handle_poll_update, handle_poll_answer_update, detect_voted_polls_on_save
+# IMPORTAR LOS NUEVOS HANDLERS
+from publisher import handle_poll_update, handle_poll_answer_update
 from scheduler import schedule_ids, cmd_programar, cmd_programados, cmd_desprogramar, SCHEDULES
-from core_utils import temp_notice, extract_id_from_text, deep_link_for_channel_message, parse_nuke_selection, parse_shortcut_line
+from core_utils import temp_notice, extract_id_from_text, deep_link_for_channel_message, parse_nuke_selection
 
-# Importar el sistema de justificaciones
-try:
-    from justifications_handler import add_justification_handlers, process_justification_links
-    JUSTIFICATIONS_AVAILABLE = True
-except ImportError:
-    JUSTIFICATIONS_AVAILABLE = False
-    logger.warning("⚠️ Sistema de justificaciones no disponible")
-    logger.info("✅ Sistema de justificaciones cargado")
 # ========= LOGGING =========
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -99,7 +92,7 @@ async def _cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE, txt:
     if not mid and update.channel_post and update.channel_post.reply_to_message:
         mid = update.channel_post.reply_to_message.message_id
     if not mid:
-        await context.bot.send_message(SOURCE_CHAT_ID, "⌨ Usa: `/cancelar <id>` o responde al mensaje a cancelar.", parse_mode="Markdown")
+        await context.bot.send_message(SOURCE_CHAT_ID, "⌨ Usa: /cancelar <id> o responde al mensaje a cancelar.")
         return
 
     # Solo marca en DB, no borra del canal
@@ -136,7 +129,7 @@ async def _cmd_eliminar(update: Update, context: ContextTypes.DEFAULT_TYPE, txt:
     if not mid and update.channel_post and update.channel_post.reply_to_message:
         mid = update.channel_post.reply_to_message.message_id
     if not mid:
-        await context.bot.send_message(SOURCE_CHAT_ID, "⌨ Usa: `/eliminar <id>` o responde al mensaje a eliminar.", parse_mode="Markdown")
+        await context.bot.send_message(SOURCE_CHAT_ID, "⌨ Usa: /eliminar <id> o responde al mensaje a eliminar.")
         return
 
     ok_del = True
@@ -181,35 +174,32 @@ async def _cmd_backup(context: ContextTypes.DEFAULT_TYPE, arg: str):
     elif v in ("off", "0", "false", "no"):
         set_active_backup(False)
     else:
-        await context.bot.send_message(SOURCE_CHAT_ID, "Usa: `/backup on|off`", parse_mode="Markdown")
+        await context.bot.send_message(SOURCE_CHAT_ID, "Usa: /backup on|off")
         return
     await context.bot.send_message(SOURCE_CHAT_ID, text_settings(), reply_markup=kb_settings(), parse_mode="Markdown")
 
-# -------------------------------------------------------
-# Comandos adicionales
-# -------------------------------------------------------
 async def _cmd_test_justification(update: Update, context: ContextTypes.DEFAULT_TYPE, txt: str):
     """Comando para probar justificaciones. Uso: /test_just <message_id>"""
-    if not JUSTIFICATIONS_AVAILABLE:
-        await context.bot.send_message(SOURCE_CHAT_ID, "❌ Sistema de justificaciones no disponible")
-        return
-        
     parts = txt.split()
     if len(parts) < 2:
-        await context.bot.send_message(SOURCE_CHAT_ID, "Uso: `/test_just <message_id>`", parse_mode="Markdown")
+        await context.bot.send_message(SOURCE_CHAT_ID, "Uso: /test_just <message_id>")
         return
     
     try:
         message_id = int(parts[1])
         user_id = update.channel_post.from_user.id if update.channel_post and update.channel_post.from_user else 123456789
         
-        from justifications_handler import send_protected_justifications
-        success = await send_protected_justifications(context, user_id, [message_id])
-        
-        if success:
-            await context.bot.send_message(SOURCE_CHAT_ID, f"✅ Justificación {message_id} enviada como prueba")
-        else:
-            await context.bot.send_message(SOURCE_CHAT_ID, f"❌ Error enviando justificación {message_id}")
+        # Importar la función aquí para evitar importaciones circulares
+        try:
+            from justifications_handler import send_protected_justification
+            success = await send_protected_justification(context, user_id, message_id)
+            
+            if success:
+                await context.bot.send_message(SOURCE_CHAT_ID, f"✅ Justificación {message_id} enviada como prueba")
+            else:
+                await context.bot.send_message(SOURCE_CHAT_ID, f"❌ Error enviando justificación {message_id}")
+        except ImportError:
+            await context.bot.send_message(SOURCE_CHAT_ID, "❌ Módulo de justificaciones no encontrado")
     
     except ValueError:
         await context.bot.send_message(SOURCE_CHAT_ID, "❌ ID inválido")
@@ -229,8 +219,7 @@ async def _cmd_nuke(context: ContextTypes.DEFAULT_TYPE, txt: str):
     if not victims:
         await context.bot.send_message(
             SOURCE_CHAT_ID,
-            "Usa: `/nuke all` | `/nuke todos` | `/nuke 1,3,5` | `/nuke 1-10` | `/nuke N`",
-            parse_mode="Markdown"
+            "Usa: /nuke all | /nuke todos | /nuke 1,3,5 | /nuke 1-10 | /nuke N"
         )
         return
 
@@ -439,7 +428,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 mid = extract_id_from_text(txt) or (txt.split()[1] if len(txt.split()) > 1 and txt.split()[1].isdigit() else None)
                 if not mid:
-                    await context.bot.send_message(SOURCE_CHAT_ID, "Usa: `/id <id>` o responde a un mensaje con `/id`.", parse_mode="Markdown")
+                    await context.bot.send_message(SOURCE_CHAT_ID, "Usa: /id <id> o responde a un mensaje con /id.")
                 else:
                     mid = int(mid)
                     link = deep_link_for_channel_message(SOURCE_CHAT_ID, mid)
@@ -460,50 +449,21 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _cmd_test_justification(update, context, txt)
             await _delete_user_command_if_possible(update, context);  return
 
-        if low.startswith(("/comandos", "/comando", "/ayuda", "/start", "/help")):
-            await context.bot.send_message(SOURCE_CHAT_ID, text_main(), reply_markup=kb_main(), parse_mode="Markdown")
+        if low.startswith(("/comandos", "/comando", "/ayuda", "/start")):
+            await context.bot.send_message(SOURCE_CHAT_ID, text_main(), reply_markup=kb_main())
             await _delete_user_command_if_possible(update, context);  return
 
-        await context.bot.send_message(SOURCE_CHAT_ID, "Comando no reconocido. Usa `/comandos`.", parse_mode="Markdown")
+        await context.bot.send_message(SOURCE_CHAT_ID, "Comando no reconocido. Usa /comandos.")
         await _delete_user_command_if_possible(update, context)
         return
 
     # --------- NO COMANDO → GUARDAR BORRADOR ----------
-    
-    # Procesar atajos @@@ antes de guardar
-    full_text = msg.text or msg.caption or ""
-    shortcut_info = parse_shortcut_line(full_text)
-    
-    if shortcut_info:
-        # Es un atajo @@@ - agregar botón al último borrador
-        drafts = list_drafts(DB_FILE)
-        if not drafts:
-            await temp_notice(context.bot, "📭 No hay borradores para agregar botón.", ttl=5)
-            await context.bot.delete_message(chat_id=SOURCE_CHAT_ID, message_id=msg.message_id)
-            return
-        
-        last_draft_id = drafts[-1][0]  # Último borrador
-        add_button(DB_FILE, last_draft_id, shortcut_info["label"], shortcut_info["url"])
-        
-        await temp_notice(
-            context.bot,
-            f"📎 Botón '{shortcut_info['label']}' agregado al borrador {last_draft_id}.",
-            ttl=6
-        )
-        
-        # Borrar el mensaje de atajo
-        try:
-            await context.bot.delete_message(chat_id=SOURCE_CHAT_ID, message_id=msg.message_id)
-        except:
-            pass
-        return
-
-    # Guardar como borrador normal
     snippet = msg.text or msg.caption or ""
     raw_json = json.dumps(msg.to_dict(), ensure_ascii=False)
     save_draft(DB_FILE, msg.message_id, snippet, raw_json)
     
-    # Detectar si es una encuesta con votos
+    # NUEVA FUNCIÓN: Detectar si es una encuesta con votos
+    from publisher import detect_voted_polls_on_save
     detect_voted_polls_on_save(msg.message_id, raw_json)
     
     logger.info(f"Guardado en borrador: {msg.message_id}")
@@ -512,32 +472,27 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.exception("Excepción no capturada", exc_info=context.error)
 
-# ========= COMANDOS DEL BOT (CLICKEABLES) =========
+# ========= set bot commands (menú de comandos) =========
 async def _set_bot_commands(app: Application):
-    """Establece los comandos del bot para que aparezcan clickeables en el menú."""
     try:
-        from telegram import BotCommand
-        commands = [
-            BotCommand("comandos", "Ver ayuda y botones principales"),
-            BotCommand("listar", "Mostrar borradores pendientes (excluye programados)"),
-            BotCommand("enviar", "Publicar ahora todos los borradores a targets activos"),
-            BotCommand("preview", "Enviar cola completa a PREVIEW (no marca como enviada)"),
-            BotCommand("programar", "Programar envío (formato: YYYY-MM-DD HH:MM, 24h)"),
-            BotCommand("programados", "Ver todas las programaciones pendientes con detalles"),
-            BotCommand("desprogramar", "Cancelar una programación específica (id) o todas (all)"),
-            BotCommand("cancelar", "Quitar borrador de la cola sin borrar del canal"),
-            BotCommand("deshacer", "Revertir el último /cancelar realizado"),
-            BotCommand("eliminar", "Borrar mensaje del canal BORRADOR y de la cola definitivamente"),
-            BotCommand("nuke", "Borrado masivo: all|todos, rangos 1-10, posiciones 1,3,5, últimos N"),
-            BotCommand("id", "Mostrar ID y enlace directo del mensaje"),
-            BotCommand("canales", "Ver IDs y estado actual de todos los targets"),
-            BotCommand("backup", "Activar/desactivar canal backup (on/off)"),
-        ]
-        
-        await app.bot.set_my_commands(commands)
-        logger.info("✅ Comandos del bot establecidos correctamente (clickeables)")
-    except Exception as e:
-        logger.error(f"❌ Error estableciendo comandos: {e}")
+        await app.bot.set_my_commands([
+            ("comandos", "Ver ayuda y botones"),
+            ("listar", "Mostrar borradores pendientes (excluye programados)"),
+            ("enviar", "Publicar ahora a targets activos"),
+            ("preview", "Enviar cola a PREVIEW (no marca enviada)"),
+            ("programar", "Programar (24h: YYYY-MM-DD HH:MM)"),
+            ("programados", "Ver programaciones pendientes"),
+            ("desprogramar", "Cancelar una programación (id|all)"),
+            ("cancelar", "Quitar de la cola (no borra del canal)"),
+            ("deshacer", "Revertir el último /cancelar"),
+            ("eliminar", "Borrar del canal y de la cola"),
+            ("nuke", "Borrar varios (all | 1,3,5 | 1-10 | N)"),
+            ("id", "Mostrar ID del mensaje"),
+            ("canales", "Ver IDs y estado de targets"),
+            ("backup", "ON/OFF para backup"),
+        ])
+    except Exception:
+        pass
 
 # ========= MAIN =========
 def main():
@@ -547,13 +502,9 @@ def main():
         .build()
     )
 
-    # ¡AGREGAR LOS NUEVOS HANDLERS PARA DETECTAR VOTOS!
+    # AGREGAR LOS NUEVOS HANDLERS PARA DETECTAR VOTOS
     app.add_handler(PollHandler(handle_poll_update))
     app.add_handler(PollAnswerHandler(handle_poll_answer_update))
-    
-    # Agregar sistema de justificaciones si está disponible
-    if JUSTIFICATIONS_AVAILABLE:
-        add_justification_handlers(app)
     
     # Handlers existentes
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
@@ -561,11 +512,12 @@ def main():
 
     app.add_error_handler(on_error)
 
-    # Establecer comandos clickeables después de la inicialización
+    logger.info("🚀 Bot iniciado con DETECCIÓN DE VOTOS! Escuchando channel_post + poll updates en el BORRADOR.")
+
+    # set comandos visibles (no afecta al canal si Telegram no los muestra ahí)
     app.post_init = _set_bot_commands
 
-    logger.info("🚀 Bot iniciado con DETECCIÓN DE VOTOS y JUSTIFICACIONES! Escuchando channel_post + poll updates en el BORRADOR.")
-
+    app.run_polling(allowed_updates=["channel_post", "callback_query", "poll", "poll_answer"], drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
