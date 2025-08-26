@@ -119,9 +119,9 @@ async def _cmd_listar(context: ContextTypes.DEFAULT_TYPE):
     drafts = [(did, snip) for (did, snip) in drafts_all if did not in SCHEDULED_LOCK]
 
     if not drafts:
-        out = ["📋 Borradores pendientes: 0"]
+        out = ["📭 **Sin borradores pendientes**"]
     else:
-        out = ["📋 Borradores pendientes:"]
+        out = ["📋 **Borradores pendientes:**"]
         for i, (did, snip) in enumerate(drafts, start=1):
             s = (snip or "").strip()
             if len(s) > 60:
@@ -130,16 +130,16 @@ async def _cmd_listar(context: ContextTypes.DEFAULT_TYPE):
 
     # Programaciones
     if not SCHEDULES:
-        out.append("\n🗒 Programaciones pendientes: 0")
+        out.append("\n⏰ **Sin programaciones activas**")
     else:
         now = datetime.now(tz=TZ)
-        out.append("\n🗒 Programaciones pendientes:")
+        out.append("\n🗓️ **Programaciones activas:**")
         for pid, rec in sorted(SCHEDULES.items()):
             when = rec["when"].astimezone(TZ).strftime("%Y-%m-%d %H:%M")
             ids = rec["ids"]
             out.append(f"• #{pid} — {when} ({TZNAME}) — {len(ids)} mensajes")
 
-    await context.bot.send_message(SOURCE_CHAT_ID, "\n".join(out))
+    await context.bot.send_message(SOURCE_CHAT_ID, "\n".join(out), parse_mode="Markdown")
 
 async def _cmd_nuke(context: ContextTypes.DEFAULT_TYPE, arg: str):
     """
@@ -218,22 +218,28 @@ def kb_main() -> InlineKeyboardMarkup:
 
 def text_main() -> str:
     return (
-        "🛠️ **Comandos principales:**\n"
+        "🛠️ **Acciones rápidas:**\n"
         "• `/listar` — muestra borradores pendientes\n"
         "• `/enviar` — publica ahora a Principal + Backup\n"
-        "• `/preview` — envía a PREVIEW sin marcar como enviada\n"
-        "• `/programar YYYY-MM-DD HH:MM` — programa envío (24h)\n"
-        "• `/programados` — ver programaciones pendientes\n"
+        "• `/preview` — envía a PREVIEW sin marcar enviada\n"
+        "• `/programar YYYY-MM-DD HH:MM` — programa envío\n"
+        "• `/programados` — ver pendientes programados\n"
         "• `/desprogramar <id|all>` — cancela programación\n"
-        "• `/nuke` — elimina mensajes:\n"
-        "  - `/nuke 5` → borra el mensaje #5\n"
-        "  - `/nuke last5` → borra los últimos 5\n"
-        "  - `/nuke 1,3,5` → borra posiciones 1, 3 y 5\n"
-        "  - `/nuke 1-5` → borra rango del 1 al 5\n"
-        "  - `/nuke all` → borra todos\n"
-        "• `/id [id]` — muestra ID y enlace\n"
-        "• `/canales` — ver canales configurados\n"
-        "\nPulsa un botón o usa `/comandos` para ver este panel."
+        "• `/id` — muestra ID del mensaje\n"
+        "• `/canales` — ver estado de canales\n"
+        "\n💣 **Comando /nuke:**\n"
+        "• `/nuke 5` — elimina el mensaje #5\n"
+        "• `/nuke last5` — elimina los últimos 5\n"
+        "• `/nuke 1,3,5` — elimina posiciones específicas\n"
+        "• `/nuke 1-5` — elimina rango\n"
+        "• `/nuke all` — elimina todos\n"
+        "\n📚 **Links de justificación:**\n"
+        "• Envía: `CASO #X https://t.me/ccjustificaciones/ID`\n"
+        "• Se convierte en botón: `Ver justificación CASO #X`\n"
+        "• Soporta múltiples: `ID,ID,ID` o `ID-ID`\n"
+        "\n🔘 **Botones personalizados:**\n"
+        "• `@@@ Texto | https://url.com` — agrega botón al último borrador\n"
+        "\n📝 Pulsa un botón o usa `/comandos` para ver este panel."
     )
 
 def kb_schedule() -> InlineKeyboardMarkup:
@@ -259,13 +265,28 @@ def text_schedule() -> str:
 
 def text_status() -> str:
     """Muestra el estado actual de los canales."""
+    # Importar el ID del canal de justificaciones si está disponible
+    justifications_info = ""
+    try:
+        from justifications_handler import JUSTIFICATIONS_CHAT_ID
+        justifications_info = f"• **Justificaciones:** `{JUSTIFICATIONS_CHAT_ID}` 📚\n"
+    except ImportError:
+        pass
+    
     return (
         f"📡 **Estado de Canales**\n\n"
-        f"• **Principal:** `{TARGET_CHAT_ID}` ✅ ON\n"
-        f"• **Backup:** `{BACKUP_CHAT_ID}` ✅ ON (Siempre activo)\n"
+        f"• **Principal:** `{TARGET_CHAT_ID}` ✅\n"
+        f"• **Backup:** `{BACKUP_CHAT_ID}` ✅\n"
         f"• **Preview:** `{PREVIEW_CHAT_ID}`\n"
-        f"\n💡 El backup está siempre activo por seguridad."
+        f"{justifications_info}"
+        f"\n💡 Todos los canales están configurados y activos."
     )
+
+def kb_status() -> InlineKeyboardMarkup:
+    """Teclado para el estado con botón volver."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Volver", callback_data="m:back")]
+    ])
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -300,7 +321,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         elif data == "m:status":
             try:
-                await q.edit_message_text(text_status(), reply_markup=kb_main(), parse_mode="Markdown")
+                await q.edit_message_text(text_status(), reply_markup=kb_status(), parse_mode="Markdown")
             except TelegramError as e:
                 if "Message is not modified" in str(e):
                     # Si el mensaje ya tiene el mismo contenido, no hacer nada
@@ -315,7 +336,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "m:settings":
             # Redirigir a status
             try:
-                await q.edit_message_text(text_status(), reply_markup=kb_main(), parse_mode="Markdown")
+                await q.edit_message_text(text_status(), reply_markup=kb_status(), parse_mode="Markdown")
             except TelegramError as e:
                 if "Message is not modified" in str(e):
                     pass
@@ -326,7 +347,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Ya no se puede cambiar, solo mostrar estado
             await q.answer("⚠️ El backup está siempre activo por seguridad", show_alert=True)
             try:
-                await q.edit_message_text(text_status(), reply_markup=kb_main(), parse_mode="Markdown")
+                await q.edit_message_text(text_status(), reply_markup=kb_status(), parse_mode="Markdown")
             except TelegramError:
                 pass
         
