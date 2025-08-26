@@ -94,8 +94,8 @@ def parse_nuke_selection(arg: str, drafts: List[Tuple[int, str]]) -> Set[int]:
 
 # --------- ATAJO @@@ ---------
 # Formato soportado: "@@@ TÍTULO | URL"
-# Devuelve dict {"label": str, "url": str} o None si no matchea.
-_AT_SHORTCUT = re.compile(r"^\s*@@@\s*(?P<label>[^|]+?)\s*\|\s*(?P<url>https?://\S+)\s*$", re.IGNORECASE)
+# Ahora acepta URLs con o sin https://
+_AT_SHORTCUT = re.compile(r"^\s*@@@\s*(?P<label>[^|]+?)\s*\|\s*(?P<url>.+)\s*$", re.IGNORECASE)
 
 def parse_shortcut_line(text: str) -> Optional[Dict[str, str]]:
     if not text:
@@ -105,4 +105,14 @@ def parse_shortcut_line(text: str) -> Optional[Dict[str, str]]:
         return None
     label = m.group("label").strip()
     url = m.group("url").strip()
+    
+    # Si la URL no tiene protocolo, agregar https://
+    if not url.startswith(('http://', 'https://', 'tg://')):
+        # Si parece una URL de telegram, mantenerla
+        if url.startswith('t.me/'):
+            url = 'https://' + url
+        # Para otras URLs, agregar https://
+        elif '.' in url:  # Verificar que al menos tenga un punto (dominio)
+            url = 'https://' + url
+    
     return {"label": label, "url": url}
