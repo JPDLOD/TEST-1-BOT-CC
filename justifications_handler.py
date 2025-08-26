@@ -6,7 +6,6 @@ Maneja deep-links para enviar justificaciones específicas desde un canal de jus
 
 import logging
 import asyncio
-import random
 from typing import Optional, Dict, Set
 from datetime import datetime, timedelta
 
@@ -36,10 +35,10 @@ def generate_justification_deep_link(bot_username: str, message_id: int) -> str:
 
 def create_justification_button(bot_username: str, message_id: int) -> InlineKeyboardMarkup:
     """
-    Crea el botón inline "Ver justificación 🔒" con deep-link.
+    Crea el botón inline "Ver justificación 📚" con deep-link.
     """
     deep_link = generate_justification_deep_link(bot_username, message_id)
-    button = InlineKeyboardButton("Ver justificación 🔒", url=deep_link)
+    button = InlineKeyboardButton("Ver justificación 📚", url=deep_link)
     return InlineKeyboardMarkup([[button]])
 
 async def send_protected_justification(
@@ -122,7 +121,15 @@ async def schedule_message_deletion(
             await context.bot.delete_message(chat_id=user_id, message_id=message_id)
             logger.info(f"🗑️ Auto-eliminada justificación {justification_id} del usuario {user_id}")
             
-            # No notificar al usuario sobre la eliminación automática
+            # Notificar al usuario que se eliminó
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text="🕐 La justificación se ha eliminado automáticamente por seguridad.",
+                    disable_notification=True
+                )
+            except:
+                pass  # Si no se puede notificar, no importa
                 
         except TelegramError as e:
             if "message not found" not in str(e).lower():
@@ -195,18 +202,20 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
         pass
     
     if success:
-        # Mensajes creativos de éxito
-        success_messages = [
-            "📚 ¡Justificación lista! Revisa con calma.",
-            "✨ Material de estudio enviado.",
-            "🎯 ¡Justificación disponible!",
-            "📖 Contenido académico listo para revisar.",
-            "🔍 Material explicativo enviado exitosamente.",
-            "💡 ¡Información detallada lista!",
-            "📝 Justificación completa disponible."
-        ]
-        
-        success_text = random.choice(success_messages)
+        # Importar mensajes creativos desde el archivo separado
+        try:
+            from justification_messages import get_random_message
+            success_text = get_random_message()
+        except ImportError:
+            # Fallback si no encuentra el archivo
+            import random
+            fallback_messages = [
+                "📚 ¡Justificación lista! Revisa con calma.",
+                "✨ Material de estudio enviado.",
+                "🎯 ¡Justificación disponible!",
+                "📖 Contenido académico listo para revisar.",
+            ]
+            success_text = random.choice(fallback_messages)
         
         await update.message.reply_text(
             success_text,
