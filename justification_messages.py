@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Banco de mensajes creativos para justificaciones médicas
-Organizado por categorías para fácil mantenimiento
+Versión Colombia - Sin referencias SAMU
 """
 
 import random
@@ -72,7 +72,7 @@ BOLD_FUNNY_MESSAGES = [
     "🎮 Pausaste el PlayStation para esto. Que valga la pena.",
     "📱 Notificación importante: No es match de Tinder, es tu justificación.",
     "🔥 Más hot que la enfermera nueva del piso 3.",
-    "💀 Si fallas después de esto, mejor vende Herbalife.",
+    "💀 Si fallas después de esto, mejor vende productos naturistas.",
     "🍺 Esta justificación pega más que guardia post-fiesta.",
     "😏 OnlyFans médico: Solo justificaciones hot para residentes.",
     "🌶️ Picante como el chisme del jefe de cirugía con la instrumentadora.",
@@ -83,25 +83,57 @@ BOLD_FUNNY_MESSAGES = [
     "👀 Vista en el chat: 1:50am. Sí, sabemos que estás de guardia.",
 ]
 
-# Referencias a la vida médica
+# Referencias a la vida médica colombiana
 MEDICAL_LIFE_REFERENCES = [
     "📞 Interconsulta respondida más rápido que las de medicina interna.",
     "⏰ Justificación enviada en menos tiempo que una cirugía de cataratas.",
     "🏃 Más rápido que residente huyendo de guardia de traumato.",
     "💯 Justificación con menos errores que una nota del R1.",
-    "⚡ Llegó más rápido que ambulancia sin tráfico (imposible, lo sé).",
+    "⚡ Llegó más rápido que ambulancia en Bogotá sin pico y placa.",
     "🎭 Drama médico resuelto. Justificación en escena.",
     "🧊 Justificación más fresca que el aire acondicionado de quirófano.",
     "⏰ 36 horas de guardia y sigues aquí. Respeto. Toma tu justificación.",
-    "☕ Equivale a 7 tazas de café del hospital (sí, del malo).",
+    "☕ Equivale a 7 tintos del hospital (sí, del aguado).",
     "📋 Más clara que las indicaciones del traumatólogo.",
     "🏃‍♂️ Llegó más rápido que R1 escapando de procedimiento.",
     "😴 Para leer entre la 4ta y 5ta alarma del despertador.",
     "🚽 Lectura perfecta para tu escondite favorito del hospital.",
-    "📱 Más notifications que el grupo de WhatsApp de la guardia.",
-    "🍜 Como la sopa Maruchan: Rápida, efectiva y salva vidas de residentes.",
+    "📱 Más notificaciones que el grupo de WhatsApp de la guardia.",
+    "🍜 Como el sancocho de la cafetería: Rápido, efectivo y salva residentes.",
     "😷 N95 para tu ignorancia. Filtración garantizada.",
     "🏥 Código azul para tu conocimiento. Reanimación exitosa.",
+    "☕ Más necesaria que el tinto de las 3am en urgencias.",
+    "🏃 Corriendo como si fuera la última cita del SOAT.",
+    "💉 Aplicada más rápido que vacuna en jornada nacional.",
+    "📄 Más organizada que historia clínica del Seguro Social.",
+    "⏰ Puntual como nunca lo es el turno del relevo.",
+    "🩺 Efectiva como Dolex para todo (según las abuelas).",
+    "🚑 Llegó sin necesidad de llamar al 123.",
+    "💊 Como el Acetaminofén: Sirve para todo.",
+]
+
+# Chistes colombianos médicos
+COLOMBIAN_MEDICAL_JOKES = [
+    "🇨🇴 Más colombiana que recetar Acetaminofén para todo.",
+    "☕ Justificación con aroma a Juan Valdez y sabor a guardia.",
+    "🏥 Cortesía de tu EPS favorita (la que sí autoriza).",
+    "💊 Si fuera medicamento, el INVIMA ya lo aprobó.",
+    "🩺 Más confiable que cita por Compensar.",
+    "📋 Autorizada sin necesidad de tutela.",
+    "🎓 Para que pases el examen como Nairo subiendo montañas.",
+    "⚽ Gol de justificación, como los de la Tricolor.",
+    "🌽 Más buena que arepa con queso.",
+    "🥘 Nutritiva como bandeja paisa para el cerebro.",
+    "☕ Suave como café de Armenia.",
+    "🏔️ Alta como el Cocuy, tu conocimiento después de leerla.",
+    "🎭 Más drama que novela del Canal RCN en el hospital.",
+    "🚕 Llegó más rápido que taxi en diciembre.",
+    "🎶 Como vallenato: Tradicional pero necesaria.",
+    "🏥 Sin filas del Sisbén, directo a tu chat.",
+    "💃 Sabrosura de conocimiento, papá.",
+    "🦜 Más rápida que chisme en Cartagena.",
+    "🏖️ Fresca como brisa en Santa Marta.",
+    "🎪 Menos circo que el sistema de salud.",
 ]
 
 # Nerdy/Técnicos
@@ -112,7 +144,7 @@ NERDY_TECHNICAL = [
     "🧫 Western Blot de tu aprendizaje: Banda única, peso molecular: ∞",
     "🩻 Hounsfield units de tu cerebro: +1000. Justificación hiperdensa detectada.",
     "💊 Inhibidor selectivo de la ignorancia. Vida media: Tu carrera entera.",
-    "🧪 Krebs cycle completado. ATP del conocimiento: Máximo.",
+    "🧪 Ciclo de Krebs completado. ATP del conocimiento: Máximo.",
     "🔬 Microscopia electrónica de tu duda: Resuelta a nivel molecular.",
     "🧬 CRISPR-Cas9 aplicado a tu ignorancia. Gen editado con éxito.",
     "📊 Curva ROC de esta justificación: AUC = 1.0. Perfecta discriminación.",
@@ -120,7 +152,7 @@ NERDY_TECHNICAL = [
 
 # Ultra Random
 ULTRA_RANDOM = [
-    "🦄 Tan rara como un turno tranquilo. Tu justificación llegó.",
+    "🦄 Tan rara como turno tranquilo en diciembre. Tu justificación llegó.",
     "🍔 Como el almuerzo en guardia: rápido y necesario.",
     "🎰 Jackpot médico: Justificación correcta enviada.",
     "🎪 Bienvenido al show. Primera fila para tu justificación.",
@@ -132,9 +164,10 @@ ULTRA_RANDOM = [
     "🦸‍♂️ Superman usa bata blanca. Tú usas esta justificación.",
     "🌮 Taco de conocimiento con extra salsa de sabiduría.",
     "🎰 777 - Ganaste el jackpot académico.",
-    "🚁 Helicóptero del SAMU trayendo tu justificación urgente.",
     "🍻 Brindis: Por ti, por mí, por esta justificación.",
-    "🎭 Shakespeare escribiría sobre esta justificación.",
+    "🎭 García Márquez escribiría sobre esta justificación.",
+    "🦎 Camaleónica como político: Se adapta a tu necesidad.",
+    "🎯 En el blanco como James en el Mundial.",
 ]
 
 # Humor negro médico (usar con moderación)
@@ -153,6 +186,7 @@ ALL_MESSAGES = (
     MEDICAL_KNOWLEDGE_HUMOR +
     BOLD_FUNNY_MESSAGES +
     MEDICAL_LIFE_REFERENCES +
+    COLOMBIAN_MEDICAL_JOKES +
     NERDY_TECHNICAL +
     ULTRA_RANDOM +
     DARK_MEDICAL_HUMOR
@@ -167,17 +201,6 @@ def get_random_message() -> str:
 def get_message_by_category(category: str = "all") -> str:
     """
     Retorna un mensaje aleatorio de una categoría específica.
-    
-    Categorías disponibles:
-    - professional: Mensajes profesionales
-    - soft_humor: Humor médico suave
-    - knowledge: Humor con conocimiento médico
-    - bold: Mensajes atrevidos y graciosos
-    - medical_life: Referencias a la vida médica
-    - nerdy: Técnicos y nerdy
-    - random: Ultra random
-    - dark: Humor negro médico
-    - all: Todos los mensajes
     """
     categories = {
         "professional": PROFESSIONAL_MESSAGES,
@@ -185,6 +208,7 @@ def get_message_by_category(category: str = "all") -> str:
         "knowledge": MEDICAL_KNOWLEDGE_HUMOR,
         "bold": BOLD_FUNNY_MESSAGES,
         "medical_life": MEDICAL_LIFE_REFERENCES,
+        "colombian": COLOMBIAN_MEDICAL_JOKES,
         "nerdy": NERDY_TECHNICAL,
         "random": ULTRA_RANDOM,
         "dark": DARK_MEDICAL_HUMOR,
@@ -197,34 +221,21 @@ def get_message_by_category(category: str = "all") -> str:
 def get_weighted_random_message() -> str:
     """
     Retorna un mensaje con probabilidades ponderadas.
-    Mayor probabilidad para mensajes profesionales y humor suave,
-    menor para humor negro.
     """
     weights = [
-        (PROFESSIONAL_MESSAGES, 20),
-        (SOFT_MEDICAL_HUMOR, 20),
+        (PROFESSIONAL_MESSAGES, 15),
+        (SOFT_MEDICAL_HUMOR, 15),
         (MEDICAL_KNOWLEDGE_HUMOR, 20),
-        (BOLD_FUNNY_MESSAGES, 15),
+        (BOLD_FUNNY_MESSAGES, 20),
         (MEDICAL_LIFE_REFERENCES, 15),
-        (NERDY_TECHNICAL, 5),
-        (ULTRA_RANDOM, 4),
+        (COLOMBIAN_MEDICAL_JOKES, 10),
+        (NERDY_TECHNICAL, 3),
+        (ULTRA_RANDOM, 2),
         (DARK_MEDICAL_HUMOR, 1),
     ]
     
-    # Crear lista ponderada
     weighted_list = []
     for messages, weight in weights:
         weighted_list.extend(messages * weight)
     
     return random.choice(weighted_list)
-
-# Para testing o debugging
-if __name__ == "__main__":
-    print("=== Mensaje aleatorio ===")
-    print(get_random_message())
-    print("\n=== Mensaje profesional ===")
-    print(get_message_by_category("professional"))
-    print("\n=== Mensaje atrevido ===")
-    print(get_message_by_category("bold"))
-    print("\n=== Mensaje ponderado (más probable profesional) ===")
-    print(get_weighted_random_message())
