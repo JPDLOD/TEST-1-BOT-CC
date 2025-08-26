@@ -35,6 +35,7 @@ def parse_justification_links(text: str) -> Tuple[List[int], str]:
     - "CASO #3 https://t.me/ccjustificaciones/11"
     - "https://t.me/ccjustificaciones/11,12,13"
     - "https://t.me/ccjustificaciones/11-15"
+    - Múltiples links: "https://t.me/ccjustificaciones/11 https://t.me/ccjustificaciones/12"
     
     Returns:
         (lista_de_ids, nombre_del_caso)
@@ -42,16 +43,19 @@ def parse_justification_links(text: str) -> Tuple[List[int], str]:
     justification_ids = []
     case_name = ""
     
-    # Buscar nombre del caso (CASO #X o cualquier texto antes del link)
-    case_pattern = re.search(r'(.*?)(?=https://)', text)
+    # Buscar nombre del caso (CASO #X o cualquier texto antes del primer link)
+    case_pattern = re.search(r'^(.*?)(?=https://)', text)
     if case_pattern:
         potential_case = case_pattern.group(1).strip()
         if potential_case:
-            case_name = potential_case
+            # Limpiar emojis comunes y caracteres
+            case_name = potential_case.replace("📚", "").replace("*", "").replace("_", "").strip()
     
-    # Extraer todos los IDs de los links
+    # Patrón para detectar todos los formatos de links
+    # Soporta: /11  /11,12,13  /11-15  y múltiples links separados
     link_pattern = re.compile(r'https?://t\.me/ccjustificaciones/(\d+(?:[,\-]\d+)*)', re.IGNORECASE)
     
+    # Encontrar todos los matches
     for match in link_pattern.finditer(text):
         id_string = match.group(1)
         
@@ -60,11 +64,17 @@ def parse_justification_links(text: str) -> Tuple[List[int], str]:
         for part in parts:
             if '-' in part:
                 # Es un rango
-                start, end = map(int, part.split('-'))
-                justification_ids.extend(range(start, end + 1))
+                try:
+                    start, end = map(int, part.split('-'))
+                    justification_ids.extend(range(start, end + 1))
+                except:
+                    pass
             else:
                 # Es un ID simple
-                justification_ids.append(int(part))
+                try:
+                    justification_ids.append(int(part))
+                except:
+                    pass
     
     # Eliminar duplicados y ordenar
     justification_ids = sorted(list(set(justification_ids)))
