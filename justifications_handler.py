@@ -108,7 +108,7 @@ def create_justification_button(bot_username: str, message_ids: List[int], case_
 
 async def clean_previous_messages(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """
-    Limpia todos los mensajes previos del usuario (justificaciones y chistes).
+    Limpia TODOS los mensajes previos del usuario (justificaciones, chistes, comandos).
     """
     # Limpiar justificaciones previas
     user_key = str(user_id)
@@ -129,7 +129,7 @@ async def clean_previous_messages(context: ContextTypes.DEFAULT_TYPE, user_id: i
         # Limpiar del cache
         del sent_justifications[user_key]
     
-    # Limpiar mensajes de chistes
+    # Limpiar mensajes de chistes y comandos
     if user_id in user_joke_messages:
         for msg_id in user_joke_messages[user_id]:
             try:
@@ -137,6 +137,21 @@ async def clean_previous_messages(context: ContextTypes.DEFAULT_TYPE, user_id: i
             except:
                 pass
         del user_joke_messages[user_id]
+    
+    # Intentar borrar mensajes de comando /start recientes (últimos 10 mensajes)
+    try:
+        # Borrar hasta 10 mensajes previos para limpiar comandos
+        for offset in range(1, 11):
+            try:
+                # Intentar borrar mensaje por offset desde el actual
+                await context.bot.delete_message(
+                    chat_id=user_id, 
+                    message_id=update.message.message_id - offset
+                )
+            except:
+                pass
+    except:
+        pass
 
 async def send_protected_justifications(
     context: ContextTypes.DEFAULT_TYPE,
