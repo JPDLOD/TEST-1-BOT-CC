@@ -41,25 +41,60 @@ DETECTED_CORRECT_ANSWERS: Dict[int, int] = {}  # {message_id: correct_option_ind
 POLL_ID_TO_MESSAGE_ID: Dict[str, int] = {}     # {poll_id: message_id} mapeo
 
 # ========= PATRÓN PARA DETECTAR LINKS DE JUSTIFICACIONES =========
-JUSTIFICATION_LINK_PATTERN = re.compile(r'https?://t\.me/ccjustificaciones/(\d+)', re.IGNORECASE)
+JUSTIFICATION_LINK_PATTERN = re.compile(r'https?://t\.me/ccjustificaciones/(\d+(?:[,\-]\d+)*)', re.IGNORECASE)
 
 # ========= Función para detectar y extraer justificaciones =========
-def extract_justification_from_text(text: str) -> Optional[Tuple[int, str]]:
+def extract_justification_from_text(text: str) -> Optional[Tuple[List[int], str]]:
     """
-    Detecta si un texto contiene un link de justificación.
-    Retorna: (message_id_justificacion, texto_limpio) o None
+    Detecta si un texto contiene links de justificación y extrae el nombre del caso.
+    Soporta múltiples IDs y rangos.
+    Retorna: ([lista_ids], nombre_caso, texto_limpio) o None
     """
     if not text:
         return None
     
-    match = JUSTIFICATION_LINK_PATTERN.search(text)
-    if match:
-        justification_id = int(match.group(1))
-        # Eliminar el link del texto
-        clean_text = JUSTIFICATION_LINK_PATTERN.sub('', text).strip()
-        return justification_id, clean_text
+    justification_ids = []
+    case_name = ""
     
-    return None
+    # Buscar nombre del caso (texto antes del link)
+    case_pattern = re.search(r'^(.*?)(?=https://)', text)
+    if case_pattern:
+        potential_case = case_pattern.group(1).strip()
+        # Limpiar emojis y caracteres especiales comunes
+        if potential_case:
+            case_name = potential_case.replace("📚", "").replace("*", "").replace("_", "").strip()
+    
+    # Extraer todos los IDs
+    for match in JUSTIFICATION_LINK_PATTERN.finditer(text):
+        id_string = match.group(1)
+        
+        # Procesar rangos y comas
+        parts = id_string.split(',')
+        for part in parts:
+            if '-' in part:
+                # Es un rango
+                try:
+                    start, end = map(int, part.split('-'))
+                    justification_ids.extend(range(start, end + 1))
+                except:
+                    pass
+            else:
+                # Es un ID simple
+                try:
+                    justification_ids.append(int(part))
+                except:
+                    pass
+    
+    if not justification_ids:
+        return None
+    
+    # Eliminar duplicados y ordenar
+    justification_ids = sorted(list(set(justification_ids)))
+    
+    # Eliminar los links del texto
+    clean_text = JUSTIFICATION_LINK_PATTERN.sub('', text).strip()
+    
+    return justification_ids, case_name, clean_text
 
 # ========= Backoff para envíos =========
 async def _send_with_backoff(func_coro_factory, *, base_pause: float):
@@ -592,15 +627,14 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
             data = json.loads(raw or "{}")
             text_content = data.get("text", "") or data.get("caption", "")
             
-            # Verificar si es un link de justificación
-            justification_match = JUSTIFICATION_LINK_PATTERN.search(text_content)
-            if justification_match:
-                justification_id = int(justification_match.group(1))
-                clean_after_removal = JUSTIFICATION_LINK_PATTERN.sub('', text_content).strip()
+            # Verificar si contiene links de justificación
+            justification_info = extract_justification_from_text(text_content)
+            if justification_info:
+                justification_ids, case_name, clean_text = justification_info
                 
-                if not clean_after_removal:
-                    # Es SOLO un link de justificación
-                    logger.info(f"🔗 Mensaje {mid} es SOLO link de justificación #{justification_id}")
+                if not clean_text:
+                    # Es SOLO links de justificación
+                    logger.info(f"🔗 Mensaje {mid} es SOLO links de justificación {justification_ids} - Caso: '{case_name}'")
                     
                     # Buscar el mensaje anterior (generalmente una encuesta)
                     if i > 0:
@@ -608,10 +642,21 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
                         try:
                             bot_info = await context.bot.get_me()
                             bot_username = bot_info.username
-                            deep_link = f"https://t.me/{bot_username}?start=just_{justification_id}"
+                            
+                            # Crear deep-link para múltiples justificaciones
+                            ids_string = "_".join(map(str, justification_ids))
+                            deep_link = f"https://t.me/{bot_username}?start=just_{ids_string}"
+                            
+                            # Personalizar texto del botón
+                            if case_name:
+                                button_text = f"Ver justificación {case_name} 📚"
+                            else:
+                                button_text = "Ver justificación 📚"
+                            
                             button = InlineKeyboardMarkup([[
-                                InlineKeyboardButton("Ver justificación 📚", url=deep_link)
+                                InlineKeyboardButton(button_text, url=deep_link)
                             ]])
+                            
                             justification_buttons_for_previous[i-1] = button
                             logger.info(f"📎 Botón de justificación preparado para mensaje anterior (índice {i-1})")
                         except Exception as e:
