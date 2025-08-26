@@ -515,40 +515,39 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # --------- DETECTAR ATAJO @@@ ----------
     # Si el mensaje contiene @@@ TEXTO | URL, procesarlo
-    if "@@@ " in txt and " | " in txt:
-        shortcut_info = parse_shortcut_line(txt)
-        if shortcut_info:
-            # Es un atajo de botón
-            label = shortcut_info["label"]
-            url = shortcut_info["url"]
+    shortcut_info = parse_shortcut_line(txt)
+    if shortcut_info:
+        # Es un atajo de botón
+        label = shortcut_info["label"]
+        url = shortcut_info["url"]
+        
+        # Buscar el último borrador para agregar el botón
+        drafts = list_drafts(DB_FILE)
+        if drafts:
+            last_draft_id = drafts[-1][0]
             
-            # Buscar el último borrador para agregar el botón
-            drafts = list_drafts(DB_FILE)
-            if drafts:
-                last_draft_id = drafts[-1][0]
-                
-                # Agregar el botón
-                clear_buttons(DB_FILE, last_draft_id)
-                add_button(DB_FILE, last_draft_id, label, url)
-                
-                await temp_notice(
-                    context.bot, 
-                    f"✅ Botón '{label}' → {url} agregado al último borrador", 
-                    ttl=5
+            # Agregar el botón (la función clear_buttons ya está en database.py)
+            clear_buttons(DB_FILE, last_draft_id)
+            add_button(DB_FILE, last_draft_id, label, url)
+            
+            await temp_notice(
+                context.bot, 
+                f"✅ Botón '{label}' agregado al último borrador", 
+                ttl=5
+            )
+            
+            # Borrar este mensaje del canal (no es contenido, es instrucción)
+            try:
+                await context.bot.delete_message(
+                    chat_id=SOURCE_CHAT_ID, 
+                    message_id=msg.message_id
                 )
-                
-                # Borrar este mensaje del canal
-                try:
-                    await context.bot.delete_message(
-                        chat_id=SOURCE_CHAT_ID, 
-                        message_id=msg.message_id
-                    )
-                except:
-                    pass
-            else:
-                await temp_notice(context.bot, "⚠️ No hay borradores para agregar el botón", ttl=5)
-            
-            return
+            except:
+                pass
+        else:
+            await temp_notice(context.bot, "⚠️ No hay borradores para agregar el botón", ttl=5)
+        
+        return
 
     # --------- NO ES COMANDO NI ATAJO → GUARDAR BORRADOR ----------
     snippet = msg.text or msg.caption or ""
