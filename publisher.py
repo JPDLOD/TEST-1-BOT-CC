@@ -2,7 +2,35 @@
 import json
 import logging
 from typing import List, Tuple, Dict, Set, Optional
-import asyncio
+import async def publicar(context: ContextTypes.DEFAULT_TYPE, *, targets: List[int], mark_as_sent: bool):
+    """Envía la cola completa EXCLUYENDO los bloqueados (SCHEDULED_LOCK)."""
+    all_rows = get_unsent_drafts(DB_FILE)  # [(message_id, text, raw_json)]
+    if not all_rows:
+        return 0, 0, {t: [] for t in targets}
+    rows = [(m, t, r) for (m, t, r) in all_rows if m not in SCHEDULED_LOCK]
+    if not rows:
+        return 0, 0, {t: [] for t in targets}
+    return await _publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
+
+async def publicar_ids(context: ContextTypes.DEFAULT_TYPE, *, ids: List[int],
+                       targets: List[int], mark_as_sent: bool):
+    # Query puntual sin duplicar lógica del módulo database
+    import sqlite3
+    if not ids:
+        return 0, 0, {t: [] for t in targets}
+    placeholders = ",".join("?" for _ in ids)
+    sql = f"SELECT message_id, snippet, raw_json FROM drafts WHERE sent=0 AND deleted=0 AND message_id IN ({placeholders}) ORDER BY message_id ASC"
+    con = sqlite3.connect(DB_FILE)
+    cur = con.cursor()
+    rows = list(cur.execute(sql, ids).fetchall())
+    con.close()
+    if not rows:
+        return 0, 0, {t: [] for t in targets}
+    return await _publicar_rows(context, rows=rows, targets=targets, mark_as_sent=mark_as_sent)
+
+async def publicar_todo_activos(context: ContextTypes.DEFAULT_TYPE):
+    pubs, fails, _ = await publicar(context, targets=get_active_targets(), mark_as_sent=True)
+    return pubs, failsio
 
 from telegram.error import RetryAfter, TimedOut, NetworkError, TelegramError
 from telegram.ext import ContextTypes
