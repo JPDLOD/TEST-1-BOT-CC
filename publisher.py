@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
+import re
 from typing import List, Tuple, Dict, Set, Optional
 import asyncio
 
 from telegram.error import RetryAfter, TimedOut, NetworkError, TelegramError
 from telegram.ext import ContextTypes
-from telegram import InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import DB_FILE, SOURCE_CHAT_ID, TARGET_CHAT_ID, BACKUP_CHAT_ID, PAUSE
 from database import get_unsent_drafts, mark_sent
@@ -39,6 +40,27 @@ SCHEDULED_LOCK: Set[int] = set()
 DETECTED_CORRECT_ANSWERS: Dict[int, int] = {}  # {message_id: correct_option_index}
 POLL_ID_TO_MESSAGE_ID: Dict[str, int] = {}     # {poll_id: message_id} mapeo
 
+# ========= PATRÓN PARA DETECTAR LINKS DE JUSTIFICACIONES =========
+JUSTIFICATION_LINK_PATTERN = re.compile(r'https?://t\.me/ccjustificaciones/(\d+)', re.IGNORECASE)
+
+# ========= Función para detectar y extraer justificaciones =========
+def extract_justification_from_text(text: str) -> Optional[Tuple[int, str]]:
+    """
+    Detecta si un texto contiene un link de justificación.
+    Retorna: (message_id_justificacion, texto_limpio) o None
+    """
+    if not text:
+        return None
+    
+    match = JUSTIFICATION_LINK_PATTERN.search(text)
+    if match:
+        justification_id = int(match.group(1))
+        # Eliminar el link del texto
+        clean_text = JUSTIFICATION_LINK_PATTERN.sub('', text).strip()
+        return justification_id, clean_text
+    
+    return None
+
 # ========= Backoff para envíos =========
 async def _send_with_backoff(func_coro_factory, *, base_pause: float):
     tries = 0
@@ -46,6 +68,7 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
         try:
             msg = await func_coro_factory()
             # pausa corta entre mensajes
+            import asyncio
             await asyncio.sleep(max(0.0, base_pause))
             return True, msg
         except RetryAfter as e:
@@ -55,21 +78,21 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
                 m = re.search(r"Retry in (\d+)", str(e))
                 wait = int(m.group(1)) if m else 3
             logger.warning(f"RetryAfter: esperando {wait}s …")
-            await asyncio.sleep(wait + 1.0)
-            tries += 1
+            import asyncio
+            await asyncio.sleep(wait + 1.0);  tries += 1
         except TimedOut:
             logger.warning("TimedOut: esperando 3s …")
-            await asyncio.sleep(3.0)
-            tries += 1
+            import asyncio
+            await asyncio.sleep(3.0);  tries += 1
         except NetworkError:
             logger.warning("NetworkError: esperando 3s …")
-            await asyncio.sleep(3.0)
-            tries += 1
+            import asyncio
+            await asyncio.sleep(3.0);  tries += 1
         except TelegramError as e:
             if "Flood control exceeded" in str(e):
                 logger.warning("Flood control… esperando 5s …")
-                await asyncio.sleep(5.0)
-                tries += 1
+                import asyncio
+                await asyncio.sleep(5.0);  tries += 1
             else:
                 logger.error(f"TelegramError no recuperable: {e}")
                 return False, None
@@ -204,22 +227,163 @@ async def extract_correct_answer_via_stop_poll(context: ContextTypes.DEFAULT_TYP
         logger.error(f"❌ Error general en stopPoll para {message_id}: {e}")
         return None
 
-def get_correct_answer_sync(message_id: int, poll_data: dict) -> int:
-    """Versión síncrona para casos donde no hay contexto async."""
-    
-    if message_id in DETECTED_CORRECT_ANSWERS:
-        return DETECTED_CORRECT_ANSWERS[message_id]
-    
-    # Solo análisis del JSON (sin stopPoll)
-    if "correct_option_id" in poll_data and poll_data["correct_option_id"] is not None:
-        try:
-            correct_id = int(poll_data["correct_option_id"])
-            DETECTED_CORRECT_ANSWERS[message_id] = correct_id
-            return correct_id
-        except (ValueError, TypeError):
-            pass
-    
-    return 0
+def extract_correct_answer_from_forwarded_poll_analysis(poll_data: dict, message_id: int) -> Optional[int]:
+    """
+    MÉTODO ESPECIAL para mensajes FORWARDEADOS donde stopPoll no funciona.
+    Usa análisis más agresivo del JSON y patrones de detección.
+    """
+    try:
+        logger.info(f"🔍 ANÁLISIS FORWARDEADO: Quiz {message_id}")
+        
+        # Método 1: correct_option_id directo (a veces existe en forwardeados)
+        if "correct_option_id" in poll_data and poll_data["correct_option_id"] is not None:
+            try:
+                correct_id = int(poll_data["correct_option_id"])
+                logger.info(f"✅ FORWARDED MÉTODO 1: correct_option_id directo = {correct_id}")
+                return correct_id
+            except (ValueError, TypeError):
+                pass
+        
+        # Método 2: Buscar en opciones por voter_count (más común en forwardeados)
+        options = poll_data.get("options", [])
+        vote_pattern = []
+        
+        for i, option in enumerate(options):
+            if isinstance(option, dict):
+                voter_count = option.get("voter_count", 0)
+                vote_pattern.append((i, voter_count))
+                if voter_count > 0:
+                    logger.info(f"✅ FORWARDED MÉTODO 2: Opción {i} ({chr(65+i)}) tiene {voter_count} voto(s)")
+                    return i
+        
+        logger.info(f"📊 Patrón de votos: {vote_pattern}")
+        
+        # Método 3: Análisis de explanation para pistas
+        explanation = poll_data.get("explanation", "")
+        if explanation:
+            logger.info(f"📝 Analizando explanation: '{explanation[:100]}...'")
+            
+            # Buscar patrones como "La respuesta correcta es C" o "Opción correcta: D"
+            import re
+            patterns = [
+                r'respuesta correcta es ([A-D])',
+                r'opci[óo]n correcta[:\s]*([A-D])',
+                r'correcta[:\s]*([A-D])',
+                r'la ([A-D]) es correcta',
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, explanation, re.IGNORECASE)
+                if match:
+                    letter = match.group(1).upper()
+                    correct_id = ord(letter) - ord('A')
+                    logger.info(f"✅ FORWARDED MÉTODO 3: Explanation indica {letter} (pos {correct_id})")
+                    return correct_id
+        
+        # Método 4: Heurística - si solo una opción está votada y total_voter_count = 1
+        total_voters = poll_data.get("total_voter_count", 0)
+        if total_voters == 1:
+            for i, (option_i, voter_count) in enumerate(vote_pattern):
+                if voter_count == 1:
+                    logger.info(f"✅ FORWARDED MÉTODO 4: Heurística - única opción votada {option_i} ({chr(65+option_i)})")
+                    return option_i
+        
+        logger.warning(f"⚠️ FORWARDED: No se pudo detectar respuesta correcta para quiz {message_id}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error en análisis de poll forwardeado: {e}")
+        return None
+
+def is_message_forwarded(raw_data: dict) -> bool:
+    """Detecta si un mensaje es forwardeado basándose en el JSON."""
+    forward_fields = ["forward_from", "forward_from_chat", "forward_from_message_id", "forward_sender_name", "forward_date"]
+    return any(field in raw_data for field in forward_fields)
+
+def extract_correct_answer_from_json_deep_analysis(poll_data: dict, message_id: int) -> Optional[int]:
+    """
+    ANÁLISIS PROFUNDO del JSON del poll para encontrar cualquier pista sobre la respuesta correcta.
+    """
+    try:
+        logger.info(f"🔬 ANÁLISIS PROFUNDO del JSON para quiz {message_id}")
+        
+        # Método 1: correct_option_id directo
+        if "correct_option_id" in poll_data and poll_data["correct_option_id"] is not None:
+            try:
+                correct_id = int(poll_data["correct_option_id"])
+                logger.info(f"✅ MÉTODO 1: correct_option_id directo = {correct_id}")
+                return correct_id
+            except (ValueError, TypeError):
+                pass
+        
+        # Método 2: Buscar en opciones por voter_count
+        options = poll_data.get("options", [])
+        for i, option in enumerate(options):
+            if isinstance(option, dict):
+                voter_count = option.get("voter_count", 0)
+                if voter_count > 0:
+                    logger.info(f"✅ MÉTODO 2: Opción {i} ({chr(65+i)}) tiene {voter_count} voto(s)")
+                    return i
+        
+        # Método 3: Buscar en results/poll_results
+        for results_key in ["results", "poll_results"]:
+            if results_key in poll_data:
+                results = poll_data[results_key]
+                if isinstance(results, dict) and "results" in results:
+                    results_list = results["results"]
+                    for i, result in enumerate(results_list):
+                        if isinstance(result, dict):
+                            if result.get("correct", False):
+                                logger.info(f"✅ MÉTODO 3: Opción {i} marcada como 'correct' en {results_key}")
+                                return i
+                            elif result.get("voter_count", 0) > 0:
+                                logger.info(f"✅ MÉTODO 3: Opción {i} tiene votos en {results_key}")
+                                return i
+        
+        # Método 4: Buscar recursivamente cualquier campo que contenga "correct"
+        def buscar_correct_recursivo(obj, path=""):
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    current_path = f"{path}.{key}" if path else key
+                    
+                    if key == "correct" and value is True:
+                        logger.info(f"🔍 MÉTODO 4: Encontrado 'correct': True en {current_path}")
+                        return True
+                    elif key == "correct_option_id" and value is not None:
+                        logger.info(f"🔍 MÉTODO 4: Encontrado correct_option_id = {value} en {current_path}")
+                        try:
+                            return int(value)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    result = buscar_correct_recursivo(value, current_path)
+                    if result is not None:
+                        return result
+            
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    current_path = f"{path}[{i}]"
+                    result = buscar_correct_recursivo(item, current_path)
+                    if result is not None:
+                        return result
+            
+            return None
+        
+        resultado_recursivo = buscar_correct_recursivo(poll_data)
+        if resultado_recursivo is not None:
+            logger.info(f"✅ MÉTODO 4: Búsqueda recursiva encontró: {resultado_recursivo}")
+            if isinstance(resultado_recursivo, int):
+                return resultado_recursivo
+        
+        # Método 5: Log completo del JSON para debugging manual
+        logger.warning(f"⚠️ ANÁLISIS EXHAUSTIVO: No se encontró respuesta correcta en quiz {message_id}")
+        logger.debug(f"📄 JSON completo del poll: {json.dumps(poll_data, indent=2, default=str)}")
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error en análisis profundo: {e}")
+        return None
 
 # ========= HANDLERS PARA CAPTURAR VOTOS EN TIEMPO REAL =========
 
@@ -272,6 +436,74 @@ async def handle_poll_answer_update(update, context):
         DETECTED_CORRECT_ANSWERS[message_id] = chosen_option
         logger.info(f"✅ POLL ANSWER: Quiz {message_id} → Usuario eligió {chr(65+chosen_option)} (posición {chosen_option})")
 
+# ========= FUNCIÓN PRINCIPAL PARA OBTENER RESPUESTA CORRECTA =========
+
+async def get_correct_answer_comprehensive(context: ContextTypes.DEFAULT_TYPE, message_id: int, poll_data: dict, raw_message_data: dict = None) -> int:
+    """
+    MÉTODO INTEGRAL que usa TODOS los enfoques posibles para detectar la respuesta correcta.
+    Ahora con soporte específico para mensajes forwardeados.
+    """
+    
+    # Verificar cache primero
+    if message_id in DETECTED_CORRECT_ANSWERS:
+        detected_answer = DETECTED_CORRECT_ANSWERS[message_id]
+        logger.info(f"🎯 Quiz {message_id}: usando respuesta cacheada → {chr(65+detected_answer)} (pos {detected_answer})")
+        return detected_answer
+    
+    # Detectar si el mensaje es forwardeado
+    is_forwarded = False
+    if raw_message_data:
+        is_forwarded = is_message_forwarded(raw_message_data)
+    
+    logger.info(f"🔍 Quiz {message_id}: tipo={'FORWARDEADO' if is_forwarded else 'DIRECTO'}")
+    
+    # ENFOQUE 1: Análisis profundo del JSON
+    json_result = extract_correct_answer_from_json_deep_analysis(poll_data, message_id)
+    if json_result is not None:
+        DETECTED_CORRECT_ANSWERS[message_id] = json_result
+        return json_result
+    
+    # ENFOQUE 2: Análisis específico para forwardeados (antes de stopPoll)
+    if is_forwarded:
+        logger.info(f"🔍 Quiz {message_id}: aplicando análisis específico para FORWARDEADOS...")
+        forwarded_result = extract_correct_answer_from_forwarded_poll_analysis(poll_data, message_id)
+        if forwarded_result is not None:
+            DETECTED_CORRECT_ANSWERS[message_id] = forwarded_result
+            return forwarded_result
+    
+    # ENFOQUE 3: stopPoll (solo para mensajes NO forwardeados)
+    if not is_forwarded:
+        logger.info(f"🛑 Quiz {message_id}: intentando stopPoll (mensaje directo)...")
+        stop_poll_result = await extract_correct_answer_via_stop_poll(context, message_id, is_forwarded)
+        if stop_poll_result is not None:
+            return stop_poll_result
+    else:
+        logger.info(f"🚫 Quiz {message_id}: saltando stopPoll (mensaje forwardeado)")
+    
+    # FALLBACK: Si todo falla
+    if is_forwarded:
+        logger.error(f"❌ FALLO FORWARDED: Quiz {message_id} - No se pudo detectar respuesta correcta (mensaje forwardeado)")
+        logger.warning(f"💡 SUGERENCIA: Para mensajes forwardeados, asegúrate de que tengan votos o explanation con pistas")
+    else:
+        logger.error(f"❌ FALLO DIRECTO: Quiz {message_id} - No se pudo detectar respuesta correcta (mensaje directo)")
+        logger.warning(f"💡 SUGERENCIA: Vota en la encuesta o verifica permisos del bot")
+    
+    return 0  # Fallback a A
+
+def get_correct_answer_sync(message_id: int, poll_data: dict) -> int:
+    """Versión síncrona para casos donde no hay contexto async."""
+    
+    if message_id in DETECTED_CORRECT_ANSWERS:
+        return DETECTED_CORRECT_ANSWERS[message_id]
+    
+    # Solo análisis del JSON (sin stopPoll)
+    json_result = extract_correct_answer_from_json_deep_analysis(poll_data, message_id)
+    if json_result is not None:
+        DETECTED_CORRECT_ANSWERS[message_id] = json_result
+        return json_result
+    
+    return 0
+
 # ========= Encuestas - VERSIÓN FINAL =========
 def _poll_payload_from_raw(raw: dict, message_id: int = None):
     """Extrae parámetros de la encuesta con detección integral."""
@@ -321,59 +553,73 @@ def _poll_payload_from_raw(raw: dict, message_id: int = None):
 
     return kwargs, is_quiz
 
-# ========= PUBLICADORES CON INTEGRACIÓN DE JUSTIFICACIONES =========
+# ========= Publicadores =========
 async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple[int, str, str]],
                          targets: List[int], mark_as_sent: bool) -> Tuple[int, int, Dict[int, List[int]]]:
     
+    # ANÁLISIS PREVIO EXHAUSTIVO: Procesar todos los quizzes que no tengan respuesta detectada
+    quizzes_to_analyze = []
+    
+    for mid, _t, raw in rows:
+        try:
+            data = json.loads(raw or "{}")
+            if "poll" in data and data["poll"].get("type") == "quiz":
+                if mid not in DETECTED_CORRECT_ANSWERS:
+                    quizzes_to_analyze.append((mid, data["poll"], data))  # Agregamos data completa
+        except:
+            continue
+    
+    if quizzes_to_analyze:
+        logger.info(f"🔬 ANÁLISIS PREVIO: Procesando {len(quizzes_to_analyze)} quizzes sin respuesta detectada")
+        
+        for quiz_mid, poll_data, full_message_data in quizzes_to_analyze:
+            is_forwarded = is_message_forwarded(full_message_data)
+            logger.info(f"🧪 Analizando quiz {quiz_mid} ({'FORWARDED' if is_forwarded else 'DIRECT'})...")
+            
+            # Usar método integral con información completa del mensaje
+            detected = await get_correct_answer_comprehensive(context, quiz_mid, poll_data, full_message_data)
+            logger.info(f"🎯 Quiz {quiz_mid}: análisis completado → {chr(65+detected)}")
+            
+            # Pequeña pausa entre análisis
+            await asyncio.sleep(0.3)
+    
+    # PROCEDER CON LA PUBLICACIÓN NORMAL
     publicados = 0
     fallidos = 0
     enviados_ids: List[int] = []
     posted_by_target: Dict[int, List[int]] = {t: [] for t in targets}
 
     for mid, _t, raw in rows:
-        logger.info(f"🔍 Procesando mensaje {mid}")
-        
-        # ========= INTEGRACIÓN CRÍTICA: PROCESAR JUSTIFICACIONES =========
-        justification_keyboard = None
-        modified_raw = raw
-        
         try:
-            from justifications_handler import process_draft_for_justifications
-            
-            logger.info(f"🔗 Verificando justificaciones en mensaje {mid}")
-            
-            # Procesar el mensaje para detectar justificaciones
-            modified_raw, justification_keyboard = await process_draft_for_justifications(context, raw)
-            
-            if justification_keyboard:
-                logger.info(f"✅ JUSTIFICACIÓN DETECTADA en mensaje {mid}: botón creado")
-            else:
-                logger.info(f"ℹ️ Mensaje {mid}: sin justificaciones detectadas")
-            
-        except ImportError as e:
-            logger.error(f"❌ Error importando justifications_handler: {e}")
-        except Exception as e:
-            logger.error(f"❌ Error procesando justificaciones para {mid}: {e}")
-
-        # Parsear el JSON (modificado o original)
-        try:
-            data = json.loads(modified_raw)
+            data = json.loads(raw or "{}")
         except Exception as e:
             logger.error(f"Error parseando JSON para mensaje {mid}: {e}")
             data = {}
 
+        # PROCESAR JUSTIFICACIONES
+        justification_id = None
+        text_content = data.get("text", "") or data.get("caption", "")
+        
+        # Detectar si hay un link de justificación
+        justification_info = extract_justification_from_text(text_content)
+        if justification_info:
+            justification_id, clean_text = justification_info
+            # Actualizar el contenido del mensaje sin el link
+            if "text" in data:
+                data["text"] = clean_text
+            elif "caption" in data:
+                data["caption"] = clean_text
+            logger.info(f"🔒 Detectado link de justificación {justification_id} en mensaje {mid}")
+
         any_success = False
         for dest in targets:
+            sent_message = None
+            
             if "poll" in data:
                 try:
                     base_kwargs, is_quiz = _poll_payload_from_raw(data, message_id=mid)
                     kwargs = dict(base_kwargs)
                     kwargs["chat_id"] = dest
-                    
-                    # AGREGAR BOTÓN DE JUSTIFICACIÓN SI EXISTE
-                    if justification_keyboard:
-                        kwargs["reply_markup"] = justification_keyboard
-                        logger.info(f"🔗 Botón de justificación agregado a encuesta {mid}")
                     
                     if is_quiz:
                         cid = kwargs.get("correct_option_id", 0)
@@ -382,40 +628,62 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
                     
                     coro_factory = lambda k=kwargs: context.bot.send_poll(**k)
                     ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
+                    sent_message = msg
                     
                 except Exception as e:
                     logger.error(f"Error procesando poll {mid}: {e}")
                     ok, msg = False, None
             else:
-                # Para mensajes normales, usar copy_message
-                async def send_normal_message():
-                    copied_msg = await context.bot.copy_message(
-                        chat_id=dest, 
-                        from_chat_id=SOURCE_CHAT_ID, 
-                        message_id=mid
+                # Para mensajes normales, si tenemos texto limpio, actualizar antes de copiar
+                if justification_info and clean_text is not None:
+                    # Enviar con el texto limpio (sin el link)
+                    if "text" in data and data["text"] == "":
+                        # Si el texto quedó vacío después de quitar el link, no enviar nada de texto
+                        coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
+                            chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
+                        )
+                    else:
+                        # Enviar con el texto limpio
+                        coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
+                            chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
+                        )
+                else:
+                    coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
+                        chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
                     )
-                    
-                    # Si hay botón de justificación, editarlo para agregarlo
-                    if justification_keyboard and copied_msg:
-                        try:
-                            await context.bot.edit_message_reply_markup(
-                                chat_id=dest,
-                                message_id=copied_msg.message_id,
-                                reply_markup=justification_keyboard
-                            )
-                            logger.info(f"🔗 Botón de justificación agregado a mensaje copiado {copied_msg.message_id}")
-                        except Exception as e:
-                            logger.warning(f"⚠️ No se pudo agregar botón de justificación: {e}")
-                    
-                    return copied_msg
-                
-                coro_factory = send_normal_message
                 ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
+                sent_message = msg
 
             if ok:
                 any_success = True
                 if msg and getattr(msg, "message_id", None):
                     posted_by_target[dest].append(msg.message_id)
+                    
+                    # Si hay justificación, agregar el botón al mensaje enviado
+                    if justification_id and sent_message:
+                        try:
+                            # Obtener el username del bot
+                            bot_info = await context.bot.get_me()
+                            bot_username = bot_info.username
+                            
+                            # Crear deep-link para la justificación
+                            deep_link = f"https://t.me/{bot_username}?start=just_{justification_id}"
+                            
+                            # Crear botón
+                            keyboard = InlineKeyboardMarkup([[
+                                InlineKeyboardButton("Ver justificación 🔒", url=deep_link)
+                            ]])
+                            
+                            # Agregar el botón al mensaje enviado
+                            await context.bot.edit_message_reply_markup(
+                                chat_id=dest,
+                                message_id=sent_message.message_id,
+                                reply_markup=keyboard
+                            )
+                            
+                            logger.info(f"✅ Botón de justificación agregado al mensaje {sent_message.message_id}")
+                        except Exception as e:
+                            logger.error(f"Error agregando botón de justificación: {e}")
 
         if any_success:
             publicados += 1
