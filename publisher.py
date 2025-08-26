@@ -41,61 +41,61 @@ SCHEDULED_LOCK: Set[int] = set()
 DETECTED_CORRECT_ANSWERS: Dict[int, int] = {}  # {message_id: correct_option_index}
 POLL_ID_TO_MESSAGE_ID: Dict[str, int] = {}     # {poll_id: message_id} mapeo
 
-# ========= PATRÓN PARA DETECTAR LINKS DE JUSTIFICACIONES =========
-JUSTIFICATION_LINK_PATTERN = re.compile(r'https?://t\.me/ccjustificaciones/(\d+(?:[,\-]\d+)*)', re.IGNORECASE)
+# ========= FUNCIÓN PARA PROCESAR JUSTIFICACIONES COMO ENLACES =========
+def process_justification_text(text: str) -> tuple[str, bool]:
+    """
+    Convierte enlaces de justificación en texto HTML con enlace clickeable.
+    
+    Entrada: "CASO #3 https://t.me/ccjustificaciones/11"
+    Salida: "<a href='https://t.me/ccjustificaciones/11'>📚 Ver justificación CASO #3</a>"
+    
+    Returns:
+        (texto_procesado, tiene_justificacion)
+    """
+    if not text or 'https://t.me/ccjustificaciones/' not in text.lower():
+        return text, False
+    
+    # Patrón mejorado para capturar el caso y el enlace
+    pattern = r'^(.*?)(https://t\.me/ccjustificaciones/\d+(?:[,\-]\d+)*)'
+    
+    match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+    if not match:
+        return text, False
+    
+    case_name = match.group(1).strip()
+    original_link = match.group(2)
+    
+    # Limpiar el nombre del caso
+    if case_name:
+        # Eliminar caracteres especiales comunes
+        case_name = re.sub(r'[📚\*_]', '', case_name).strip()
+        if case_name:
+            link_text = f"📚 Ver justificación {case_name}"
+        else:
+            link_text = "📚 Ver justificación"
+    else:
+        link_text = "📚 Ver justificación"
+    
+    # Crear enlace HTML que Telegram renderizará como clickeable
+    html_link = f'<a href="{original_link}">{link_text}</a>'
+    
+    # Obtener cualquier texto adicional después del enlace
+    remaining_text = text[match.end():].strip()
+    
+    # Si hay texto adicional, agregarlo
+    if remaining_text:
+        processed_text = html_link + "\n\n" + remaining_text
+    else:
+        processed_text = html_link
+    
+    return processed_text, True
 
-# ========= Función para detectar y extraer justificaciones =========
+# ========= Función helper para extraer justificaciones (compatibilidad) =========
 def extract_justification_from_text(text: str) -> Optional[Tuple[List[int], str]]:
     """
-    Detecta si un texto contiene links de justificación y extrae el nombre del caso.
-    Soporta múltiples IDs y rangos.
-    Retorna: ([lista_ids], nombre_caso, texto_limpio) o None
+    Helper de compatibilidad - ya no se usa para botones pero mantiene la firma.
     """
-    if not text:
-        return None
-    
-    justification_ids = []
-    case_name = ""
-    
-    # Buscar nombre del caso (texto antes del link)
-    case_pattern = re.search(r'^(.*?)(?=https://)', text)
-    if case_pattern:
-        potential_case = case_pattern.group(1).strip()
-        # Limpiar emojis y caracteres especiales comunes
-        if potential_case:
-            case_name = potential_case.replace("📚", "").replace("*", "").replace("_", "").strip()
-    
-    # Extraer todos los IDs
-    for match in JUSTIFICATION_LINK_PATTERN.finditer(text):
-        id_string = match.group(1)
-        
-        # Procesar rangos y comas
-        parts = id_string.split(',')
-        for part in parts:
-            if '-' in part:
-                # Es un rango
-                try:
-                    start, end = map(int, part.split('-'))
-                    justification_ids.extend(range(start, end + 1))
-                except:
-                    pass
-            else:
-                # Es un ID simple
-                try:
-                    justification_ids.append(int(part))
-                except:
-                    pass
-    
-    if not justification_ids:
-        return None
-    
-    # Eliminar duplicados y ordenar
-    justification_ids = sorted(list(set(justification_ids)))
-    
-    # Eliminar los links del texto
-    clean_text = JUSTIFICATION_LINK_PATTERN.sub('', text).strip()
-    
-    return justification_ids, case_name, clean_text
+    return None  # Ya no creamos botones, usamos enlaces
 
 # ========= Backoff para envíos =========
 async def _send_with_backoff(func_coro_factory, *, base_pause: float):
@@ -104,31 +104,29 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
         try:
             msg = await func_coro_factory()
             # pausa corta entre mensajes
-            import asyncio
             await asyncio.sleep(max(0.0, base_pause))
             return True, msg
         except RetryAfter as e:
             wait = getattr(e, "retry_after", None)
             if wait is None:
-                import re
                 m = re.search(r"Retry in (\d+)", str(e))
                 wait = int(m.group(1)) if m else 3
             logger.warning(f"RetryAfter: esperando {wait}s …")
-            import asyncio
-            await asyncio.sleep(wait + 1.0);  tries += 1
+            await asyncio.sleep(wait + 1.0)
+            tries += 1
         except TimedOut:
             logger.warning("TimedOut: esperando 3s …")
-            import asyncio
-            await asyncio.sleep(3.0);  tries += 1
+            await asyncio.sleep(3.0)
+            tries += 1
         except NetworkError:
             logger.warning("NetworkError: esperando 3s …")
-            import asyncio
-            await asyncio.sleep(3.0);  tries += 1
+            await asyncio.sleep(3.0)
+            tries += 1
         except TelegramError as e:
             if "Flood control exceeded" in str(e):
                 logger.warning("Flood control… esperando 5s …")
-                import asyncio
-                await asyncio.sleep(5.0);  tries += 1
+                await asyncio.sleep(5.0)
+                tries += 1
             else:
                 logger.error(f"TelegramError no recuperable: {e}")
                 return False, None
@@ -301,7 +299,6 @@ def extract_correct_answer_from_forwarded_poll_analysis(poll_data: dict, message
             logger.info(f"📝 Analizando explanation: '{explanation[:100]}...'")
             
             # Buscar patrones como "La respuesta correcta es C" o "Opción correcta: D"
-            import re
             patterns = [
                 r'respuesta correcta es ([A-D])',
                 r'opci[óo]n correcta[:\s]*([A-D])',
@@ -613,106 +610,43 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
             # Pequeña pausa entre análisis
             await asyncio.sleep(0.3)
     
-    # ANÁLISIS PREVIO: Detectar mensajes que son links de justificación
-    justification_buttons_for_previous = {}  # {message_index: button}
-    messages_to_skip = set()  # Índices de mensajes que NO se deben enviar
-    
-    for i, (mid, _t, raw) in enumerate(rows):
-        try:
-            data = json.loads(raw or "{}")
-            text_content = data.get("text", "") or data.get("caption", "")
-            
-            if not text_content:
-                continue
-            
-            # Verificar si contiene links de justificación
-            if 'https://t.me/ccjustificaciones/' in text_content.lower():
-                justification_info = extract_justification_from_text(text_content)
-                
-                if justification_info:
-                    justification_ids, case_name, clean_text = justification_info
-                    
-                    # SIEMPRE procesar como justificación si tiene el link
-                    logger.info(f"🔗 Mensaje {mid}: justificaciones {justification_ids}, caso: '{case_name}'")
-                    
-                    # Buscar el mensaje anterior (generalmente una encuesta)
-                    if i > 0:
-                        try:
-                            bot_info = await context.bot.get_me()
-                            bot_username = bot_info.username
-                            
-                            # Crear deep-link para múltiples justificaciones
-                            ids_string = "_".join(map(str, justification_ids))
-                            deep_link = f"https://t.me/{bot_username}?start=just_{ids_string}"
-                            
-                            # Personalizar texto del botón
-                            if case_name:
-                                button_text = f"Ver justificación {case_name} 📚"
-                            else:
-                                button_text = "Ver justificación 📚"
-                            
-                            button = InlineKeyboardMarkup([[
-                                InlineKeyboardButton(button_text, url=deep_link)
-                            ]])
-                            
-                            justification_buttons_for_previous[i-1] = button
-                            logger.info(f"📎 Botón '{button_text}' preparado para mensaje anterior")
-                        except Exception as e:
-                            logger.error(f"Error preparando botón: {e}")
-                    
-                    # Marcar este mensaje para NO enviarlo
-                    messages_to_skip.add(i)
-        except Exception as e:
-            logger.error(f"Error analizando mensaje {mid}: {e}")
-    
     # PROCEDER CON LA PUBLICACIÓN
     publicados = 0
     fallidos = 0
     enviados_ids: List[int] = []
     posted_by_target: Dict[int, List[int]] = {t: [] for t in targets}
-    last_sent_messages = {}  # {target: last_message}
 
     for i, (mid, _t, raw) in enumerate(rows):
-        # SALTAR mensajes que son solo links de justificación
-        if i in messages_to_skip:
-            logger.info(f"⏭️ Saltando mensaje {mid} (solo link de justificación)")
-            # Marcar como enviado para que no quede pendiente
-            if mark_as_sent:
-                enviados_ids.append(mid)
-            continue
-        
         try:
             data = json.loads(raw or "{}")
         except Exception as e:
             logger.error(f"Error parseando JSON para mensaje {mid}: {e}")
             data = {}
 
-        # Procesar texto para quitar links de justificación si hay más contenido
+        # ========= NUEVO: PROCESAR JUSTIFICACIONES COMO ENLACES =========
         text_content = data.get("text", "") or data.get("caption", "")
-        justification_match = JUSTIFICATION_LINK_PATTERN.search(text_content)
-        if justification_match:
-            clean_text = JUSTIFICATION_LINK_PATTERN.sub('', text_content).strip()
-            if clean_text:
-                # Hay más contenido, actualizar
+        has_justification = False
+        
+        if text_content:
+            processed_text, has_justification = process_justification_text(text_content)
+            
+            if has_justification:
+                # Actualizar el texto procesado
                 if "text" in data:
-                    data["text"] = clean_text
+                    data["text"] = processed_text
                 elif "caption" in data:
-                    data["caption"] = clean_text
+                    data["caption"] = processed_text
 
         any_success = False
         for dest in targets:
             sent_message = None
             
             if "poll" in data:
+                # Enviar encuesta sin cambios
                 try:
                     base_kwargs, is_quiz = _poll_payload_from_raw(data, message_id=mid)
                     kwargs = dict(base_kwargs)
                     kwargs["chat_id"] = dest
-                    
-                    # Agregar botón de justificación si corresponde
-                    if i in justification_buttons_for_previous:
-                        kwargs["reply_markup"] = justification_buttons_for_previous[i]
-                        logger.info(f"📎 Agregando botón de justificación a encuesta {mid}")
                     
                     if is_quiz:
                         cid = kwargs.get("correct_option_id", 0)
@@ -726,31 +660,56 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
                 except Exception as e:
                     logger.error(f"Error procesando poll {mid}: {e}")
                     ok, msg = False, None
+                    
+            elif has_justification:
+                # ========= ENVIAR MENSAJE CON ENLACE HTML =========
+                try:
+                    # Extraer otros componentes del mensaje si existen
+                    photo = data.get("photo")
+                    document = data.get("document")
+                    video = data.get("video")
+                    
+                    # Si es solo texto, enviar con parse_mode HTML
+                    if not photo and not document and not video:
+                        coro_factory = lambda: context.bot.send_message(
+                            chat_id=dest,
+                            text=processed_text,
+                            parse_mode="HTML",
+                            disable_web_page_preview=False  # Mostrar preview del enlace
+                        )
+                    else:
+                        # Si tiene media, copiar el mensaje original pero con caption modificado
+                        coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
+                            chat_id=d,
+                            from_chat_id=SOURCE_CHAT_ID,
+                            message_id=m,
+                            caption=processed_text,
+                            parse_mode="HTML"
+                        )
+                    
+                    ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
+                    sent_message = msg
+                    
+                except Exception as e:
+                    logger.error(f"Error enviando mensaje con justificación {mid}: {e}")
+                    # Fallback: copiar mensaje original sin modificar
+                    coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
+                        chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
+                    )
+                    ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
+                    sent_message = msg
             else:
-                # Mensaje normal
+                # Mensaje normal sin justificación
                 coro_factory = lambda d=dest, m=mid: context.bot.copy_message(
                     chat_id=d, from_chat_id=SOURCE_CHAT_ID, message_id=m
                 )
                 ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
                 sent_message = msg
-                
-                # Si este mensaje tiene botón de justificación para agregar
-                if ok and sent_message and i in justification_buttons_for_previous:
-                    try:
-                        await context.bot.edit_message_reply_markup(
-                            chat_id=dest,
-                            message_id=sent_message.message_id,
-                            reply_markup=justification_buttons_for_previous[i]
-                        )
-                        logger.info(f"✅ Botón de justificación agregado al mensaje {sent_message.message_id}")
-                    except Exception as e:
-                        logger.error(f"Error agregando botón: {e}")
 
             if ok:
                 any_success = True
                 if msg and getattr(msg, "message_id", None):
                     posted_by_target[dest].append(msg.message_id)
-                    last_sent_messages[dest] = msg
 
         if any_success:
             publicados += 1
