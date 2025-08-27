@@ -17,13 +17,20 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.error import TelegramError
 
 # ========= CONFIGURACIÓN =========
-BOT_TOKEN = "8256996324:AAH2cD9VBEK7iQrlmiwCi11zwOzAJgyg1d4"  # @JUST_CC_bot
-JUSTIFICATIONS_CHAT_ID = -1003058530208  # Canal de justificaciones (cambiar a tu canal privado si quieres)
-AUTO_DELETE_MINUTES = 10  # Tiempo antes de borrar
-MAX_CONCURRENT_REQUESTS = 10  # Máximo de solicitudes concurrentes por usuario
+import os
+
+# Token del bot (desde variable de entorno o hardcoded)
+BOT_TOKEN = os.environ.get("JUSTIFICATIONS_BOT_TOKEN", "8256996324:AAH2cD9VBEK7iQrlmiwCi11zwOzAJgyg1d4")  # @JUST_CC_bot
+
+# Canal de justificaciones (cambiar a tu canal privado si quieres)
+JUSTIFICATIONS_CHAT_ID = int(os.environ.get("JUSTIFICATIONS_CHAT_ID", "-1003058530208"))
+
+# Configuraciones
+AUTO_DELETE_MINUTES = int(os.environ.get("AUTO_DELETE_MINUTES", "10"))  # Tiempo antes de borrar
+MAX_CONCURRENT_REQUESTS = int(os.environ.get("MAX_CONCURRENT_REQUESTS", "10"))  # Máximo de solicitudes concurrentes
 
 # Admins del bot (agrega tu ID aquí)
-ADMIN_IDS = [123456789]  # Reemplaza con tu ID de Telegram
+ADMIN_IDS = [int(id) for id in os.environ.get("ADMIN_IDS", "123456789").split(",")]  # IDs separados por comas
 
 # ========= LOGGING =========
 logging.basicConfig(
