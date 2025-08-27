@@ -1,5 +1,51 @@
+# -*- coding: utf-8 -*-
+import json
+import logging
+import re
+from typing import List, Tuple, Dict, Set, Optional
+import asyncio
+
+from telegram.error import RetryAfter, TimedOut, NetworkError, TelegramError
+from telegram.ext import ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+from config import DB_FILE, SOURCE_CHAT_ID, TARGET_CHAT_ID, BACKUP_CHAT_ID, PAUSE
+from database import get_unsent_drafts, mark_sent
+
+logger = logging.getLogger(__name__)
+
+# ========= CONFIGURACIÓN DEL BOT DE JUSTIFICACIONES =========
+JUSTIFICATIONS_BOT_USERNAME = "JUST_CC_bot"  # Username del bot de justificaciones
+
+# ========= Estado de targets =========
+# BACKUP siempre activo por seguridad
+ACTIVE_BACKUP: bool = True  # SIEMPRE ON - No se puede cambiar
+
+def is_active_backup() -> bool:
+    """Backup siempre activo por seguridad."""
+    return True  # Siempre retorna True
+
+def set_active_backup(value: bool) -> None:
+    """DEPRECADO - Backup siempre activo."""
+    # No hace nada, backup siempre ON
+    pass
+
+def get_active_targets() -> List[int]:
+    targets = [TARGET_CHAT_ID]
+    if BACKUP_CHAT_ID:  # Siempre incluye backup si está configurado
+        targets.append(BACKUP_CHAT_ID)
+    return targets
+
+# ========= Contadores / locks (usados por otros módulos) =========
+STATS = {"cancelados": 0, "eliminados": 0}
+SCHEDULED_LOCK: Set[int] = set()
+
+# ========= CACHE GLOBAL PARA RESPUESTAS CORRECTAS DETECTADAS =========
+DETECTED_CORRECT_ANSWERS: Dict[int, int] = {}  # {message_id: correct_option_index}
+POLL_ID_TO_MESSAGE_ID: Dict[str, int] = {}     # {poll_id: message_id} mapeo
+
 # ========= FUNCIÓN PARA PROCESAR JUSTIFICACIONES CON DEEP LINKS =========
-def process_justification_text(text: str) -> tuple[str, bool]:
+def process_justification_text(text: str) -> Tuple[str, bool]:
     """
     Convierte enlaces de justificación en deep links al bot de justificaciones.
     
@@ -72,3 +118,10 @@ def process_justification_text(text: str) -> tuple[str, bool]:
     logger.info(f"📝 Texto del enlace: {link_text}")
     
     return processed_text, True
+
+# ========= Función helper para compatibilidad =========
+def extract_justification_from_text(text: str) -> Optional[Tuple[List[int], str]]:
+    """
+    Helper de compatibilidad - ya no se usa para botones.
+    """
+    return None  # Ya no creamos botones, usamos enlaces
