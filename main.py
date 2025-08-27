@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Bot simplificado y optimizado - SIN comandos cancelar/eliminar/deshacer
+# Bot principal - SIN manejo de justificaciones (ahora lo hace @JUST_CC_bot)
 
 import json
 import logging
@@ -206,10 +206,10 @@ def text_main() -> str:
         "• `/nuke` 1,3,5 — elimina posiciones específicas\n"
         "• `/nuke` 1-5 — elimina rango\n"
         "• `/nuke` all — elimina todos\n"
-        "\n📚 **Links de justificación:**\n"
-        "• Envía: `CASO #X https://t.me/ccjustificaciones/ID`\n"
-        "• Se convierte en botón: `Ver justificación CASO #X`\n"
-        "• Soporta múltiples: `ID,ID,ID` o `ID-ID`\n"
+        "\n📚 **Justificaciones:**\n"
+        "• Los enlaces de justificación se convierten automáticamente\n"
+        "• Redirigen al bot @JUST_CC_bot\n"
+        "• Las justificaciones se entregan protegidas individualmente\n"
         "\n🔘 **Botones personalizados:**\n"
         "• `@@@ Texto | URL` — agrega botón al último borrador\n"
         "\n📝 Pulsa un botón o usa `/comandos` para ver este panel."
@@ -238,20 +238,14 @@ def text_schedule() -> str:
 
 def text_status() -> str:
     """Muestra el estado actual de los canales."""
-    justifications_info = ""
-    try:
-        from config import JUSTIFICATIONS_CHAT_ID
-        justifications_info = f"• **Justificaciones:** `{JUSTIFICATIONS_CHAT_ID}` 📚\n"
-    except ImportError:
-        pass
-    
     return (
         f"📡 **Estado de Canales**\n\n"
         f"• **Principal:** `{TARGET_CHAT_ID}` ✅\n"
         f"• **Backup:** `{BACKUP_CHAT_ID}` ✅\n"
         f"• **Preview:** `{PREVIEW_CHAT_ID}`\n"
-        f"{justifications_info}"
-        f"\n💡 Todos los canales están configurados y activos."
+        f"• **Bot Justificaciones:** @JUST_CC_bot 📚\n"
+        f"\n💡 Todos los canales están configurados y activos.\n"
+        f"Las justificaciones ahora las maneja el bot dedicado."
     )
 
 def kb_status() -> InlineKeyboardMarkup:
@@ -433,19 +427,6 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low.startswith("/test_just"):
-            parts = txt.split(maxsplit=1)
-            if len(parts) < 2:
-                await context.bot.send_message(SOURCE_CHAT_ID, "Uso: /test_just <id> o /test_just <id1,id2,id3>")
-            else:
-                try:
-                    from justifications_handler import cmd_test_justification
-                    await cmd_test_justification(update, context)
-                except ImportError:
-                    await context.bot.send_message(SOURCE_CHAT_ID, "❌ Módulo de justificaciones no disponible")
-            await _delete_user_command_if_possible(update, context)
-            return
-
         if low.startswith(("/comandos", "/ayuda", "/start")):
             await context.bot.send_message(SOURCE_CHAT_ID, text_main(), reply_markup=kb_main(), parse_mode="Markdown")
             await _delete_user_command_if_possible(update, context)
@@ -502,7 +483,6 @@ async def _set_bot_commands(app: Application):
             ("nuke", "Eliminar mensajes"),
             ("id", "Mostrar ID del mensaje"),
             ("canales", "Ver estado de canales"),
-            ("test_just", "Probar justificación"),
         ])
     except Exception:
         pass
@@ -515,13 +495,8 @@ def main():
     app.add_handler(PollHandler(handle_poll_update))
     app.add_handler(PollAnswerHandler(handle_poll_answer_update))
     
-    # IMPORTANTE: Agregar handlers de justificaciones ANTES del handler principal
-    try:
-        from justifications_handler import add_justification_handlers
-        add_justification_handlers(app)
-        logger.info("✅ Sistema de justificaciones activado")
-    except ImportError:
-        logger.warning("⚠️ Módulo de justificaciones no encontrado")
+    # NOTA: Ya NO agregamos justifications_handler porque ahora lo maneja @JUST_CC_bot
+    logger.info("📚 Justificaciones ahora las maneja @JUST_CC_bot")
     
     # Handler principal del canal
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
@@ -534,12 +509,13 @@ def main():
 
     logger.info("🚀 Bot iniciado! Escuchando en el canal BORRADOR.")
     logger.info(f"✅ Backup siempre activo en: {BACKUP_CHAT_ID}")
+    logger.info("📚 Las justificaciones las maneja el bot separado @JUST_CC_bot")
 
     # Configurar comandos
     app.post_init = _set_bot_commands
 
     app.run_polling(
-        allowed_updates=["channel_post", "callback_query", "poll", "poll_answer", "message"], 
+        allowed_updates=["channel_post", "callback_query", "poll", "poll_answer"], 
         drop_pending_updates=True
     )
 
