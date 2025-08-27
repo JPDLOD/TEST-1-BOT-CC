@@ -1,71 +1,48 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-Ejecuta ambos bots en el mismo proceso/servicio
-Solución para ejecutar todo en un solo servicio de Render
-"""
+"""Ejecuta ambos bots"""
 
-import asyncio
-import logging
+import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
 import threading
+import time
+import logging
 
-# Configurar logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def run_main_bot():
-    """Ejecuta el bot principal en un thread separado."""
+def run_bot(module_name):
     try:
-        logger.info("🚀 Iniciando BOT PRINCIPAL...")
-        import main
-        main.main()
+        logger.info(f"Starting {module_name}...")
+        time.sleep(2 if module_name == "justifications_bot" else 1)
+        __import__(module_name).main()
     except Exception as e:
-        logger.error(f"❌ Error en bot principal: {e}")
-        sys.exit(1)
-
-def run_justifications_bot():
-    """Ejecuta el bot de justificaciones en un thread separado."""
-    try:
-        logger.info("📚 Iniciando BOT DE JUSTIFICACIONES...")
-        import justifications_bot
-        justifications_bot.main()
-    except Exception as e:
-        logger.error(f"❌ Error en bot de justificaciones: {e}")
+        logger.error(f"Error in {module_name}: {e}")
         sys.exit(1)
 
 def main():
-    """Función principal que ejecuta ambos bots."""
-    logger.info("="*60)
-    logger.info("🎯 INICIANDO SISTEMA DUAL DE BOTS")
-    logger.info("="*60)
-    
-    # Crear threads para cada bot
-    thread_main = threading.Thread(target=run_main_bot, daemon=False)
-    thread_just = threading.Thread(target=run_justifications_bot, daemon=False)
-    
-    # Iniciar ambos threads
-    thread_main.start()
-    thread_just.start()
-    
-    logger.info("✅ Ambos bots iniciados correctamente")
-    logger.info("Bot Principal: Maneja publicaciones")
-    logger.info("Bot Justificaciones: Maneja justificaciones protegidas")
-    
-    # Esperar a que ambos threads terminen (nunca deberían terminar)
-    try:
-        thread_main.join()
-        thread_just.join()
-    except KeyboardInterrupt:
-        logger.info("⏹️ Deteniendo bots...")
-        sys.exit(0)
-    except Exception as e:
-        logger.error(f"❌ Error inesperado: {e}")
+    if not os.environ.get("BOT_TOKEN"):
+        logger.error("Missing BOT_TOKEN")
         sys.exit(1)
+    
+    if not os.environ.get("JUST_BOT_TOKEN"):
+        logger.error("Missing JUST_BOT_TOKEN")
+        sys.exit(1)
+    
+    t1 = threading.Thread(target=run_bot, args=("main",), daemon=True)
+    t2 = threading.Thread(target=run_bot, args=("justifications_bot",), daemon=True)
+    
+    t1.start()
+    t2.start()
+    
+    logger.info("Both bots started")
+    
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Stopping...")
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()
