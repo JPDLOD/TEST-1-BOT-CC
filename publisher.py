@@ -14,6 +14,9 @@ from database import get_unsent_drafts, mark_sent
 
 logger = logging.getLogger(__name__)
 
+# ========= CONFIGURACIÓN DEL BOT DE JUSTIFICACIONES =========
+JUSTIFICATIONS_BOT_USERNAME = "JUST_CC_bot"  # Username del bot de justificaciones
+
 # ========= Estado de targets =========
 # BACKUP siempre activo por seguridad
 ACTIVE_BACKUP: bool = True  # SIEMPRE ON - No se puede cambiar
@@ -41,13 +44,13 @@ SCHEDULED_LOCK: Set[int] = set()
 DETECTED_CORRECT_ANSWERS: Dict[int, int] = {}  # {message_id: correct_option_index}
 POLL_ID_TO_MESSAGE_ID: Dict[str, int] = {}     # {poll_id: message_id} mapeo
 
-# ========= FUNCIÓN PARA PROCESAR JUSTIFICACIONES COMO ENLACES =========
+# ========= FUNCIÓN PARA PROCESAR JUSTIFICACIONES CON DEEP LINKS =========
 def process_justification_text(text: str) -> tuple[str, bool]:
     """
-    Convierte enlaces de justificación en texto HTML con enlace clickeable.
+    Convierte enlaces de justificación en deep links al bot de justificaciones.
     
-    Entrada: "CASO #3 https://t.me/ccjustificaciones/11"
-    Salida: "<a href='https://t.me/ccjustificaciones/11'>📚 Ver justificación CASO #3</a>"
+    Entrada: "CASO #3 https://t.me/ccjustificaciones/123"
+    Salida: "<a href='https://t.me/JUST_CC_bot?start=just_123'>📚 Ver justificación CASO #3</a>"
     
     Returns:
         (texto_procesado, tiene_justificacion)
@@ -55,8 +58,8 @@ def process_justification_text(text: str) -> tuple[str, bool]:
     if not text or 'https://t.me/ccjustificaciones/' not in text.lower():
         return text, False
     
-    # Patrón mejorado para capturar el caso y el enlace
-    pattern = r'^(.*?)(https://t\.me/ccjustificaciones/\d+(?:[,\-]\d+)*)'
+    # Patrón para capturar el caso y el enlace con el ID
+    pattern = r'^(.*?)(https://t\.me/ccjustificaciones/(\d+(?:[,\-]\d+)*))'
     
     match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
     if not match:
@@ -64,6 +67,7 @@ def process_justification_text(text: str) -> tuple[str, bool]:
     
     case_name = match.group(1).strip()
     original_link = match.group(2)
+    justification_id = match.group(3)  # Extraer el ID del mensaje
     
     # Limpiar el nombre del caso
     if case_name:
@@ -76,8 +80,12 @@ def process_justification_text(text: str) -> tuple[str, bool]:
     else:
         link_text = "📚 Ver justificación"
     
-    # Crear enlace HTML que Telegram renderizará como clickeable
-    html_link = f'<a href="{original_link}">{link_text}</a>'
+    # Crear deep link al bot de justificaciones
+    # Formato: https://t.me/JUST_CC_bot?start=just_123
+    deep_link = f"https://t.me/{JUSTIFICATIONS_BOT_USERNAME}?start=just_{justification_id}"
+    
+    # Crear enlace HTML que redirige al bot
+    html_link = f'<a href="{deep_link}">{link_text}</a>'
     
     # Obtener cualquier texto adicional después del enlace
     remaining_text = text[match.end():].strip()
@@ -88,12 +96,14 @@ def process_justification_text(text: str) -> tuple[str, bool]:
     else:
         processed_text = html_link
     
+    logger.info(f"🔗 Convertido: {original_link} → Deep link al bot: {deep_link}")
+    
     return processed_text, True
 
-# ========= Función helper para extraer justificaciones (compatibilidad) =========
+# ========= Función helper para compatibilidad =========
 def extract_justification_from_text(text: str) -> Optional[Tuple[List[int], str]]:
     """
-    Helper de compatibilidad - ya no se usa para botones pero mantiene la firma.
+    Helper de compatibilidad - ya no se usa para botones.
     """
     return None  # Ya no creamos botones, usamos enlaces
 
@@ -623,7 +633,7 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
             logger.error(f"Error parseando JSON para mensaje {mid}: {e}")
             data = {}
 
-        # ========= NUEVO: PROCESAR JUSTIFICACIONES COMO ENLACES =========
+        # ========= PROCESAR JUSTIFICACIONES CON DEEP LINKS AL BOT =========
         text_content = data.get("text", "") or data.get("caption", "")
         has_justification = False
         
@@ -631,7 +641,7 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
             processed_text, has_justification = process_justification_text(text_content)
             
             if has_justification:
-                # Actualizar el texto procesado
+                # Actualizar el texto procesado con deep link al bot
                 if "text" in data:
                     data["text"] = processed_text
                 elif "caption" in data:
@@ -662,7 +672,7 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
                     ok, msg = False, None
                     
             elif has_justification:
-                # ========= ENVIAR MENSAJE CON ENLACE HTML =========
+                # ========= ENVIAR MENSAJE CON DEEP LINK AL BOT =========
                 try:
                     # Extraer otros componentes del mensaje si existen
                     photo = data.get("photo")
