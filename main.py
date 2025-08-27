@@ -969,3 +969,32 @@ def main():
 
 if __name__ == "__main__":
     main()
+# ===== MAIN =====
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    # Handlers ya definidos arriba en tu archivo:
+    #  - handle_channel
+    #  - handle_callback
+    #  - on_error
+    #  - (opcional) _set_bot_commands
+
+    app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_error_handler(on_error)
+
+    # Si definiste _set_bot_commands arriba, lo usamos; si no, lo ignoramos sin romper nada.
+    try:
+        app.post_init = _set_bot_commands
+    except NameError:
+        pass
+
+    # Arranca el bot principal (canal borrador, botones, etc.)
+    app.run_polling(
+        allowed_updates=["channel_post", "callback_query"],
+        drop_pending_updates=True
+    )
+
+
+if __name__ == "__main__":
+    main()
