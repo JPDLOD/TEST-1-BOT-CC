@@ -1,70 +1,49 @@
 # -*- coding: utf-8 -*-
 """
-Lanza ambos bots (principal + justificaciones) en un solo worker.
-
-- Mantiene tu main.py tal cual (el bot principal).
-- Arranca main.main() en un thread.
-- Arranca el bot de justificaciones en otro thread **solo si** hay token.
-- Evita que el proceso muera si alguno de los dos cae (logs claros).
-
-Procfile:
-  worker: python run_both_bots.py
+Arranca ambos procesos:
+  - main.py        (bot principal)
+  - justifications_bot.py  (bot de justificaciones)
+Es robusto y no requiere que modifiques main.py.
 """
-import logging
-import os
-import threading
+
+import subprocess
+import sys
+import signal
 import time
 
-import main as main_bot
+procs = []
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
-log = logging.getLogger("runner")
+def start():
+    p1 = subprocess.Popen([sys.executable, "main.py"])
+    procs.append(p1)
+    p2 = subprocess.Popen([sys.executable, "justifications_bot.py"])
+    procs.append(p2)
 
-
-def _run_main():
-    try:
-        log.info("Iniciando bot principal…")
-        main_bot.main()
-    except Exception as e:
-        log.exception("Main bot terminó con error: %s", e)
-
-
-def _run_jst():
-    try:
-        import justifications_bot as j_bot  # import tardío para no romper si el archivo falta
-        log.info("Iniciando bot de justificaciones…")
-        j_bot.main()
-    except Exception as e:
-        log.exception("Justifications bot terminó con error: %s", e)
-
-
-def main():
-    # Bot principal SIEMPRE
-    t_main = threading.Thread(target=_run_main, name="main-bot", daemon=True)
-    t_main.start()
-    log.info("Main bot lanzado en thread.")
-
-    # Bot de justificaciones SOLO si hay token
-    jst_token = os.environ.get("JUSTIFICATIONS_BOT_TOKEN", "").strip()
-    if jst_token:
-        t_jst = threading.Thread(target=_run_jst, name="jst-bot", daemon=True)
-        t_jst.start()
-        log.info("Justifications bot lanzado en thread.")
-    else:
-        log.warning("JUSTIFICATIONS_BOT_TOKEN no está definido. Solo correrá el bot principal.")
-
-    # Mantener vivo el proceso mientras alguno siga corriendo
-    try:
-        while True:
-            time.sleep(2.0)
-            if not t_main.is_alive():
-                log.error("El bot principal terminó. Saliendo del runner.")
-                break
-            # si hay jst y muere, avisamos pero mantenemos vivo el principal
-            # (logs del hilo jst ya mostrarán el motivo)
-    except KeyboardInterrupt:
-        log.info("Recibido KeyboardInterrupt. Saliendo…")
-
+def stop(sig=None, frame=None):
+    for p in procs:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+    # espera corta y fuerza kill si siguen vivos
+    t0 = time.time()
+    while time.time() - t0 < 5:
+        alive = [p for p in procs if p.poll() is None]
+        if not alive:
+            break
+        time.sleep(0.2)
+    for p in procs:
+        if p.poll() is None:
+            try:
+                p.kill()
+            except Exception:
+                pass
 
 if __name__ == "__main__":
-    main()
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
+    start()
+    # Espera a que alguno termine (si muere, Render lo reinicia)
+    exit_codes = [p.wait() for p in procs]
+    stop()
+    sys.exit(max(exit_codes) if exit_codes else 0)
