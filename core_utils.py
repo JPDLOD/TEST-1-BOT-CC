@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
-import re
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional
 
 from config import TZ, SOURCE_CHAT_ID
 
@@ -65,25 +64,7 @@ def deep_link_for_channel_message(chat_id: int, mid: int) -> str:
         cid = cid[4:]
     return f"https://t.me/c/{cid}/{mid}"
 
-# ========= ATAJO @@@ =========
-# Formato: "@@@ TÍTULO | URL"
-_AT_SHORTCUT = re.compile(r"^\s*@@@\s*(?P<label>[^|]+?)\s*\|\s*(?P<url>.+)\s*$", re.IGNORECASE)
-
-def parse_shortcut_line(text: str) -> Optional[Dict[str, str]]:
-    """Detecta y parsea líneas con formato @@@ texto | url."""
-    if not text:
-        return None
-    m = _AT_SHORTCUT.match(text.strip())
-    if not m:
-        return None
-    label = m.group("label").strip()
-    url = m.group("url").strip()
-    
-    # Si la URL no tiene protocolo, agregar https://
-    if not url.startswith(('http://', 'https://', 'tg://')):
-        if url.startswith('t.me/'):
-            url = 'https://' + url
-        elif '.' in url:
-            url = 'https://' + url
-    
-    return {"label": label, "url": url}
+# FUNCIONALIDAD @@@ REMOVIDA COMPLETAMENTE
+def parse_shortcut_line(text: str) -> None:
+    """Función stub - funcionalidad removida."""
+    return None
