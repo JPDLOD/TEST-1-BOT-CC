@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-# Bot principal - VERSIÓN CORREGIDA DEFINITIVA
+# Bot principal - VERSIÓN FINAL SIN ERRORES
 
 import json
 import logging
 import re
-from datetime import datetime, timedelta  # IMPORTADO GLOBALMENTE
+from datetime import datetime, timedelta  # IMPORT GLOBAL
 from typing import Optional, Set
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -170,7 +170,7 @@ async def _cmd_preview(context: ContextTypes.DEFAULT_TYPE):
     pubs, fails, _ = await publicar_ids(context, ids=ids, targets=[PREVIEW_CHAT_ID], mark_as_sent=False)
     await context.bot.send_message(SOURCE_CHAT_ID, f"🧪 Preview: enviados {pubs}, fallidos {fails}.")
 
-# ========= UI/Menús =========
+# ========= UI/Menús - CORREGIDO SIN BACKTICKS =========
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Listar", callback_data="m:list"),
@@ -181,27 +181,27 @@ def kb_main() -> InlineKeyboardMarkup:
     ])
 
 def text_main() -> str:
-    # CORREGIDO: Todos los backticks están bien cerrados
+    # SIN BACKTICKS PROBLEMÁTICOS - SOLO MARKDOWN BÁSICO
     return (
         "🛠️ **Comandos disponibles:**\n\n"
         "📋 **Gestión de borradores:**\n"
-        "• `/listar` — muestra borradores pendientes\n"
-        "• `/enviar` — publica ahora en Principal + Backup\n"
-        "• `/preview` — envía a PREVIEW sin marcar enviada\n"
-        "• `/nuke` — elimina mensajes (all, 5, last5, 1-5, 1,3,5)\n\n"
+        "• /listar — muestra borradores pendientes\n"
+        "• /enviar — publica ahora en Principal + Backup\n"
+        "• /preview — envía a PREVIEW sin marcar enviada\n"
+        "• /nuke — elimina mensajes (all, 5, last5, 1-5, 1,3,5)\n\n"
         "⏰ **Programación:**\n"
-        "• `/programar YYYY-MM-DD HH:MM` — programa envío\n"
-        "• `/programados` — ver programaciones activas\n"
-        "• `/desprogramar id` o `/desprogramar all` — cancela programación\n\n"
+        "• /programar YYYY-MM-DD HH:MM — programa envío\n"
+        "• /programados — ver programaciones activas\n"
+        "• /desprogramar id o /desprogramar all — cancela\n\n"
         "📚 **Justificaciones:**\n"
         "• Los enlaces se convierten automáticamente\n"
         "• Redirigen al bot @clinicase_bot\n"
-        "• `/test_just id` — probar justificación\n\n"
+        "• /test_just id — probar justificación\n\n"
         "🔘 **Otros:**\n"
-        "• Formato: @@@ Texto | URL — agrega botón al último borrador\n"
-        "• `/id` — muestra ID del mensaje\n"
-        "• `/canales` — ver estado de canales\n"
-        "• `/comandos` o `/ayuda` — muestra este menú"
+        "• Formato: @@@ Texto | URL — agrega botón\n"
+        "• /id — muestra ID del mensaje\n"
+        "• /canales — ver estado de canales\n"
+        "• /comandos o /ayuda — muestra este menú"
     )
 
 def kb_schedule() -> InlineKeyboardMarkup:
@@ -217,11 +217,10 @@ def kb_schedule() -> InlineKeyboardMarkup:
     ])
 
 def text_schedule() -> str:
-    # CORREGIDO: Backticks bien cerrados
     return (
         "⏰ **Programar envío**\n\n"
         "Elige un atajo o usa formato manual:\n"
-        "`/programar YYYY-MM-DD HH:MM`\n\n"
+        "/programar YYYY-MM-DD HH:MM\n\n"
         "Formato 24h (00:00-23:59)"
     )
 
@@ -231,13 +230,12 @@ def kb_status() -> InlineKeyboardMarkup:
     ])
 
 def text_status() -> str:
-    # CORREGIDO: Todos los backticks bien cerrados
     return (
         f"📡 **Estado de Canales**\n\n"
-        f"• **Principal:** `{TARGET_CHAT_ID}` ✅\n"
-        f"• **Backup:** `{BACKUP_CHAT_ID}` ✅\n"
-        f"• **Preview:** `{PREVIEW_CHAT_ID}` 👁️\n"
-        f"• **Borrador:** `{SOURCE_CHAT_ID}` 📝\n\n"
+        f"• **Principal:** {TARGET_CHAT_ID} ✅\n"
+        f"• **Backup:** {BACKUP_CHAT_ID} ✅\n"
+        f"• **Preview:** {PREVIEW_CHAT_ID} 👁️\n"
+        f"• **Borrador:** {SOURCE_CHAT_ID} 📝\n\n"
         f"📚 **Bot de Justificaciones:**\n"
         f"• @clinicase_bot ✅\n"
         f"• Solo responde a deep links\n"
@@ -246,7 +244,7 @@ def text_status() -> str:
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja callbacks de botones - VERSIÓN CORREGIDA."""
+    """Maneja callbacks de botones."""
     q = update.callback_query
     if not q:
         return
@@ -288,7 +286,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "m:back":
             await q.edit_message_text(text_main(), reply_markup=kb_main(), parse_mode="Markdown")
         
-        # Programación - CORREGIDO CON datetime IMPORTADO GLOBALMENTE
+        # Programación
         elif data.startswith("s:"):
             if data == "s:custom":
                 custom_kb = InlineKeyboardMarkup([[
@@ -296,8 +294,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]])
                 custom_text = (
                     "✏️ **Formato manual:**\n\n"
-                    "`/programar YYYY-MM-DD HH:MM`\n\n"
-                    "Ejemplo: `/programar 2024-12-25 18:00`\n"
+                    "/programar YYYY-MM-DD HH:MM\n\n"
+                    "Ejemplo: /programar 2024-12-25 18:00\n"
                     "Formato 24 horas (00:00-23:59)"
                 )
                 await q.edit_message_text(
@@ -307,11 +305,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             
             elif data == "s:list":
-                # Ver programados con botón volver
                 if not SCHEDULES:
                     text_prog = "📭 **No hay programaciones pendientes**\n\nPuedes programar envíos usando los botones de abajo."
                 else:
-                    now = datetime.now(tz=TZ)  # datetime ya importado globalmente
+                    now = datetime.now(tz=TZ)
                     lines = ["🗒 **Programaciones pendientes:**\n"]
                     for pid, rec in sorted(SCHEDULES.items()):
                         when = rec["when"].astimezone(TZ).strftime("%Y-%m-%d %H:%M")
@@ -320,11 +317,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         lines.append(f"• #{pid} — {when} ({TZNAME}) — {eta} — {len(ids)} mensajes")
                     text_prog = "\n".join(lines) + "\n\nUsa los botones para gestionar las programaciones."
                 
-                # Mantener los botones del menú de programación
                 await q.edit_message_text(text_prog, reply_markup=kb_schedule(), parse_mode="Markdown")
             
             elif data == "s:clear":
-                # Cancelar todas las programaciones
                 count = 0
                 for pid, rec in list(SCHEDULES.items()):
                     job = rec.get("job")
@@ -346,8 +341,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.edit_message_text(cancel_text, reply_markup=kb_schedule(), parse_mode="Markdown")
             
             else:
-                # Atajos de tiempo - CORREGIDO
-                now = datetime.now(tz=TZ)  # datetime ya importado globalmente
+                # Atajos de tiempo
+                now = datetime.now(tz=TZ)
                 when = None
                 
                 if data == "s:+5":
@@ -395,7 +390,6 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ========= COMANDOS =========
     if _is_command_text(txt):
-        # Extraer comando base
         parts = txt.strip().split()
         cmd = parts[0].lower() if parts else ""
         
@@ -447,8 +441,8 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 error_text = (
                     "❌ **Formato incorrecto**\n\n"
-                    "Usa: `/programar YYYY-MM-DD HH:MM`\n"
-                    "Ejemplo: `/programar 2024-12-25 18:00`\n\n"
+                    "Usa: /programar YYYY-MM-DD HH:MM\n"
+                    "Ejemplo: /programar 2024-12-25 18:00\n\n"
                     "Formato 24 horas (00:00-23:59)"
                 )
                 await context.bot.send_message(
@@ -476,7 +470,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 link = deep_link_for_channel_message(SOURCE_CHAT_ID, rid)
                 await context.bot.send_message(
                     SOURCE_CHAT_ID, 
-                    f"🆔 ID: `{rid}`\n🔗 Link: {link}",
+                    f"🆔 ID: {rid}\n🔗 Link: {link}",
                     parse_mode="Markdown"
                 )
             else:
@@ -485,13 +479,13 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     link = deep_link_for_channel_message(SOURCE_CHAT_ID, int(mid))
                     await context.bot.send_message(
                         SOURCE_CHAT_ID, 
-                        f"🆔 ID: `{mid}`\n🔗 Link: {link}",
+                        f"🆔 ID: {mid}\n🔗 Link: {link}",
                         parse_mode="Markdown"
                     )
                 else:
                     await context.bot.send_message(
                         SOURCE_CHAT_ID, 
-                        "Usa: `/id numero` o responde a un mensaje con `/id`",
+                        "Usa: /id numero o responde a un mensaje con /id",
                         parse_mode="Markdown"
                     )
             await _delete_user_command_if_possible(update, context)
@@ -515,7 +509,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(parts) < 2:
                     await context.bot.send_message(
                         SOURCE_CHAT_ID,
-                        "Uso: `/test_just id`",
+                        "Uso: /test_just id",
                         parse_mode="Markdown"
                     )
                 else:
@@ -529,7 +523,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Comando no reconocido
         await context.bot.send_message(
             SOURCE_CHAT_ID, 
-            "❌ Comando no reconocido. Usa `/comandos` para ver la lista",
+            "❌ Comando no reconocido. Usa /comandos para ver la lista",
             parse_mode="Markdown"
         )
         await _delete_user_command_if_possible(update, context)
