@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Bot principal - TOTALMENTE CORREGIDO
+# Bot principal - VERSIÓN FINAL CORREGIDA
 
 import json
 import logging
@@ -22,7 +22,7 @@ from database import (
 from publisher import publicar_todo_activos, publicar_ids, get_active_targets, STATS, SCHEDULED_LOCK
 from publisher import handle_poll_update, handle_poll_answer_update, detect_voted_polls_on_save
 from scheduler import schedule_ids, cmd_programar, cmd_programados, cmd_desprogramar, SCHEDULES
-from core_utils import temp_notice, extract_id_from_text, deep_link_for_channel_message, parse_shortcut_line
+from core_utils import temp_notice, extract_id_from_text, deep_link_for_channel_message, parse_shortcut_line, human_eta
 
 # ========= LOGGING =========
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -243,7 +243,7 @@ def text_status() -> str:
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja callbacks de botones - TOTALMENTE CORREGIDO."""
+    """Maneja callbacks de botones - VERSIÓN FINAL CORREGIDA."""
     q = update.callback_query
     if not q:
         return
@@ -278,7 +278,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.edit_message_text(text_status(), reply_markup=kb_status(), parse_mode="Markdown")
             except TelegramError as e:
                 if "Message is not modified" in str(e):
-                    # Si el mensaje ya tiene el mismo contenido, simplemente ignorar
                     pass
                 else:
                     raise
@@ -302,14 +301,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             
             elif data == "s:list":
-                # Mostrar programados y mantener el menú
-                from scheduler import SCHEDULES
+                # CORRECCIÓN: Mostrar programados EDITANDO el mensaje con botones
                 from datetime import datetime
+                
                 if not SCHEDULES:
-                    text_prog = "📭 **No hay programaciones pendientes**\n\nVuelve a programar con los botones de abajo."
+                    text_prog = "📭 **No hay programaciones pendientes**\n\nPuedes programar envíos usando los botones de abajo."
                 else:
                     now = datetime.now(tz=TZ)
-                    from core_utils import human_eta
                     lines = ["🗒 **Programaciones pendientes:**\n"]
                     for pid, rec in sorted(SCHEDULES.items()):
                         when = rec["when"].astimezone(TZ).strftime("%Y-%m-%d %H:%M")
@@ -318,11 +316,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         lines.append(f"• #{pid} — {when} ({TZNAME}) — {eta} — {len(ids)} mensajes")
                     text_prog = "\n".join(lines) + "\n\nUsa los botones para gestionar las programaciones."
                 
+                # IMPORTANTE: Mantener los botones del menú de programación
                 await q.edit_message_text(text_prog, reply_markup=kb_schedule(), parse_mode="Markdown")
             
             elif data == "s:clear":
-                # Cancelar todas las programaciones y volver al menú
-                from scheduler import SCHEDULES, SCHEDULED_LOCK
+                # Cancelar todas las programaciones y mantener el menú
                 count = 0
                 for pid, rec in list(SCHEDULES.items()):
                     job = rec.get("job")
@@ -388,10 +386,15 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ========= COMANDOS =========
     if _is_command_text(txt):
-        low = txt.lower().split()[0]  # Solo tomar el comando, ignorar argumentos
+        # Extraer solo el comando base, sin argumentos
+        parts = txt.strip().split()
+        if parts:
+            cmd = parts[0].lower()
+        else:
+            return
         
-        # COMANDOS PRINCIPALES
-        if low in ("/comandos", "/ayuda", "/help", "/start"):
+        # COMANDOS PRINCIPALES - CORREGIDO
+        if cmd in ["/comandos", "/ayuda", "/help", "/start"]:
             await context.bot.send_message(
                 SOURCE_CHAT_ID, 
                 text_main(), 
@@ -401,19 +404,18 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low in ("/listar", "/lista", "/list"):
+        if cmd in ["/listar", "/lista", "/list"]:
             await _cmd_listar(context)
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low.startswith("/nuke"):
-            parts = txt.split(maxsplit=1)
-            arg = parts[1] if len(parts) > 1 else ""
+        if cmd == "/nuke":
+            arg = txt[5:].strip() if len(txt) > 5 else ""
             await _cmd_nuke(context, arg)
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low in ("/enviar", "/send"):
+        if cmd in ["/enviar", "/send"]:
             await temp_notice(context.bot, "⏳ Procesando envío…", ttl=4)
             ok, fail = await publicar_todo_activos(context)
             msg_out = f"✅ Publicados {ok}."
@@ -426,12 +428,12 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low == "/preview":
+        if cmd == "/preview":
             await _cmd_preview(context)
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low == "/programar":
+        if cmd == "/programar":
             parts = txt.split(maxsplit=2)
             if len(parts) >= 3:
                 when_str = f"{parts[1]} {parts[2]}"
@@ -446,20 +448,19 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low == "/programados":
+        if cmd == "/programados":
             await cmd_programados(context)
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low.startswith("/desprogramar"):
-            parts = txt.split(maxsplit=1)
-            arg = parts[1] if len(parts) > 1 else ""
+        if cmd == "/desprogramar":
+            arg = txt[13:].strip() if len(txt) > 13 else ""
             await cmd_desprogramar(context, arg)
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low.startswith("/id"):
-            if update.channel_post and update.channel_post.reply_to_message and len(txt.split()) == 1:
+        if cmd == "/id":
+            if update.channel_post and update.channel_post.reply_to_message and len(parts) == 1:
                 rid = update.channel_post.reply_to_message.message_id
                 link = deep_link_for_channel_message(SOURCE_CHAT_ID, rid)
                 await context.bot.send_message(
@@ -485,7 +486,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low in ("/canales", "/channels", "/targets"):
+        if cmd in ["/canales", "/channels", "/targets"]:
             await context.bot.send_message(
                 SOURCE_CHAT_ID, 
                 text_status(), 
@@ -495,12 +496,11 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low.startswith("/test_just"):
+        if cmd == "/test_just":
             try:
                 from justifications_handler import cmd_test_justification
                 await cmd_test_justification(update, context)
             except ImportError:
-                parts = txt.split(maxsplit=1)
                 if len(parts) < 2:
                     await context.bot.send_message(
                         SOURCE_CHAT_ID,
