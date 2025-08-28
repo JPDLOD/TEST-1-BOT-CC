@@ -32,6 +32,7 @@ SCHEDULED_LOCK: Set[int] = set()
 # ========= Cache para respuestas de quiz =========
 DETECTED_CORRECT_ANSWERS: Dict[int, int] = {}
 POLL_ID_TO_MESSAGE_ID: Dict[str, int] = {}
+VOTED_POLLS: Set[int] = set()  # Agregar cache de polls ya votados
 
 # ========= Procesar justificaciones =========
 def process_justification_text(text: str) -> Tuple[str, bool]:
@@ -107,6 +108,50 @@ async def _send_with_backoff(func_coro_factory, *, base_pause: float):
             logger.error("Demasiados reintentos")
             return False, None
 
+# ========= NUEVA FUNCIÓN: Votar para detectar respuesta correcta =========
+async def vote_to_detect_correct_answer(context: ContextTypes.DEFAULT_TYPE, message_id: int) -> Optional[int]:
+    """
+    Vota en la encuesta para detectar la respuesta correcta.
+    Funciona con mensajes directos y reenviados.
+    """
+    if message_id in VOTED_POLLS:
+        # Ya votamos antes, usar cache
+        return DETECTED_CORRECT_ANSWERS.get(message_id)
+    
+    try:
+        logger.info(f"🗳️ Votando en quiz {message_id} para detectar respuesta correcta...")
+        
+        # Intentar votar en cada opción hasta encontrar la correcta
+        for option in range(10):  # Max 10 opciones en Telegram
+            try:
+                # Intentar votar
+                await context.bot.answer_poll_query(
+                    poll_id=message_id,
+                    option_ids=[option]
+                )
+                
+                # Si llegamos aquí sin error, esta es la respuesta correcta
+                logger.info(f"✅ Respuesta correcta detectada: opción {option} ({chr(65+option)})")
+                DETECTED_CORRECT_ANSWERS[message_id] = option
+                VOTED_POLLS.add(message_id)
+                return option
+                
+            except TelegramError as e:
+                if "POLL_ANSWER_INVALID" in str(e) or "wrong" in str(e).lower():
+                    # Opción incorrecta, probar siguiente
+                    continue
+                elif "POLL_CLOSED" in str(e):
+                    logger.warning(f"Quiz {message_id} ya está cerrado")
+                    break
+                elif "already voted" in str(e).lower():
+                    # Ya votamos, intentar obtener del cache
+                    logger.info(f"Ya votado en quiz {message_id}")
+                    break
+    except Exception as e:
+        logger.error(f"Error votando: {e}")
+    
+    return None
+
 # ========= Polls/Quiz =========
 def detect_voted_polls_on_save(message_id: int, raw_json: str):
     """Detecta si es quiz y mapea poll_id."""
@@ -127,7 +172,7 @@ def detect_voted_polls_on_save(message_id: int, raw_json: str):
             correct_option_id = poll.get("correct_option_id")
             if correct_option_id is not None:
                 DETECTED_CORRECT_ANSWERS[message_id] = int(correct_option_id)
-                logger.info(f"Respuesta correcta: {correct_option_id}")
+                logger.info(f"Respuesta correcta en JSON: {correct_option_id}")
     except Exception as e:
         logger.error(f"Error: {e}")
 
@@ -184,6 +229,7 @@ def _poll_payload_from_raw(raw: dict, message_id: int = None):
     else:
         kwargs["type"] = "quiz"
         
+        # Usar respuesta detectada si existe
         if message_id and message_id in DETECTED_CORRECT_ANSWERS:
             correct_option_id = DETECTED_CORRECT_ANSWERS[message_id]
         elif p.get("correct_option_id") is not None:
@@ -212,6 +258,19 @@ def _poll_payload_from_raw(raw: dict, message_id: int = None):
 # ========= Publicadores =========
 async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple[int, str, str]],
                          targets: List[int], mark_as_sent: bool) -> Tuple[int, int, Dict[int, List[int]]]:
+    
+    # NUEVO: Pre-procesar quizzes para detectar respuestas correctas
+    for mid, _t, raw in rows:
+        try:
+            data = json.loads(raw or "{}")
+            if "poll" in data and data["poll"].get("type") == "quiz":
+                if mid not in DETECTED_CORRECT_ANSWERS and mid not in VOTED_POLLS:
+                    # Intentar votar para detectar respuesta correcta
+                    detected = await vote_to_detect_correct_answer(context, mid)
+                    if detected is not None:
+                        logger.info(f"✅ Quiz {mid}: respuesta detectada votando → {chr(65+detected)}")
+        except:
+            continue
     
     publicados = 0
     fallidos = 0
@@ -248,7 +307,8 @@ async def _publicar_rows(context: ContextTypes.DEFAULT_TYPE, *, rows: List[Tuple
                     
                     if is_quiz:
                         cid = kwargs.get("correct_option_id", 0)
-                        logger.info(f"Enviando quiz {mid} → respuesta: {chr(65+cid)}")
+                        status = "✅ DETECTADO" if mid in DETECTED_CORRECT_ANSWERS else "⚠️ DEFAULT"
+                        logger.info(f"📊 {status}: Enviando quiz {mid} → respuesta: {chr(65+cid)}")
                     
                     coro_factory = lambda k=kwargs: context.bot.send_poll(**k)
                     ok, msg = await _send_with_backoff(coro_factory, base_pause=PAUSE)
