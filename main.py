@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-# Bot principal - VERSIÓN FINAL SIN ERRORES
+# Bot principal - VERSIÓN CORREGIDA
 
 import json
 import logging
-import re
-from datetime import datetime, timedelta  # IMPORT GLOBAL
+from datetime import datetime, timedelta
 from typing import Optional, Set
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,13 +15,12 @@ from config import (
     SOURCE_CHAT_ID, TARGET_CHAT_ID, PREVIEW_CHAT_ID, BACKUP_CHAT_ID
 )
 from database import (
-    init_db, save_draft, list_drafts,
-    add_button, clear_buttons
+    init_db, save_draft, list_drafts
 )
 from publisher import publicar_todo_activos, publicar_ids, get_active_targets, STATS, SCHEDULED_LOCK
 from publisher import handle_poll_update, handle_poll_answer_update, detect_voted_polls_on_save
 from scheduler import schedule_ids, cmd_programar, cmd_programados, cmd_desprogramar, SCHEDULES
-from core_utils import temp_notice, extract_id_from_text, deep_link_for_channel_message, parse_shortcut_line, human_eta
+from core_utils import temp_notice, extract_id_from_text, deep_link_for_channel_message, human_eta
 
 # ========= LOGGING =========
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -58,6 +56,7 @@ def parse_nuke_args(arg: str) -> Set[int]:
     if arg in ("all", "todos"):
         return set(ids_in_order)
     
+    import re
     last_match = re.match(r'^(?:last|l|últimos?|u)(\d+)$', arg)
     if last_match:
         n = int(last_match.group(1))
@@ -170,7 +169,7 @@ async def _cmd_preview(context: ContextTypes.DEFAULT_TYPE):
     pubs, fails, _ = await publicar_ids(context, ids=ids, targets=[PREVIEW_CHAT_ID], mark_as_sent=False)
     await context.bot.send_message(SOURCE_CHAT_ID, f"🧪 Preview: enviados {pubs}, fallidos {fails}.")
 
-# ========= UI/Menús - CORREGIDO SIN BACKTICKS =========
+# ========= UI/Menús =========
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Listar", callback_data="m:list"),
@@ -181,7 +180,6 @@ def kb_main() -> InlineKeyboardMarkup:
     ])
 
 def text_main() -> str:
-    # SIN BACKTICKS PROBLEMÁTICOS - SOLO MARKDOWN BÁSICO
     return (
         "🛠️ **Comandos disponibles:**\n\n"
         "📋 **Gestión de borradores:**\n"
@@ -195,10 +193,9 @@ def text_main() -> str:
         "• /desprogramar id o /desprogramar all — cancela\n\n"
         "📚 **Justificaciones:**\n"
         "• Los enlaces se convierten automáticamente\n"
-        "• Redirigen al bot @clinicase_bot\n"
+        "• Redirigen al bot @clinicase_bot\n"  # CORREGIDO
         "• /test_just id — probar justificación\n\n"
         "🔘 **Otros:**\n"
-        "• Formato: @@@ Texto | URL — agrega botón\n"
         "• /id — muestra ID del mensaje\n"
         "• /canales — ver estado de canales\n"
         "• /comandos o /ayuda — muestra este menú"
@@ -275,13 +272,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(text_schedule(), reply_markup=kb_schedule(), parse_mode="Markdown")
         
         elif data == "m:status":
-            try:
-                await q.edit_message_text(text_status(), reply_markup=kb_status(), parse_mode="Markdown")
-            except TelegramError as e:
-                if "Message is not modified" in str(e):
-                    pass
-                else:
-                    raise
+            await q.edit_message_text(text_status(), reply_markup=kb_status(), parse_mode="Markdown")
         
         elif data == "m:back":
             await q.edit_message_text(text_main(), reply_markup=kb_main(), parse_mode="Markdown")
@@ -305,43 +296,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             
             elif data == "s:list":
-                if not SCHEDULES:
-                    text_prog = "📭 **No hay programaciones pendientes**\n\nPuedes programar envíos usando los botones de abajo."
-                else:
-                    now = datetime.now(tz=TZ)
-                    lines = ["🗒 **Programaciones pendientes:**\n"]
-                    for pid, rec in sorted(SCHEDULES.items()):
-                        when = rec["when"].astimezone(TZ).strftime("%Y-%m-%d %H:%M")
-                        ids = rec["ids"]
-                        eta = human_eta(rec["when"], now)
-                        lines.append(f"• #{pid} — {when} ({TZNAME}) — {eta} — {len(ids)} mensajes")
-                    text_prog = "\n".join(lines) + "\n\nUsa los botones para gestionar las programaciones."
-                
-                await q.edit_message_text(text_prog, reply_markup=kb_schedule(), parse_mode="Markdown")
+                await cmd_programados(context)
             
             elif data == "s:clear":
-                count = 0
-                for pid, rec in list(SCHEDULES.items()):
-                    job = rec.get("job")
-                    if job:
-                        try:
-                            job.schedule_removal()
-                        except:
-                            pass
-                    for i in rec.get("ids", []):
-                        SCHEDULED_LOCK.discard(i)
-                    SCHEDULES.pop(pid, None)
-                    count += 1
-                
-                if count > 0:
-                    cancel_text = f"❌ **{count} programacion(es) cancelada(s)**\n\nPuedes programar nuevamente usando los botones."
-                else:
-                    cancel_text = "ℹ️ **No había programaciones para cancelar**\n\nUsa los botones para programar envíos."
-                
-                await q.edit_message_text(cancel_text, reply_markup=kb_schedule(), parse_mode="Markdown")
+                await cmd_desprogramar(context, "all")
             
             else:
-                # Atajos de tiempo
+                # Atajos de tiempo - ENVIAR MENSAJE NUEVO, NO EDITAR
                 now = datetime.now(tz=TZ)
                 when = None
                 
@@ -360,14 +321,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ids = [did for (did, _) in list_drafts(DB_FILE)]
                     if ids:
                         await schedule_ids(context, when, ids)
+                        # ENVIAR MENSAJE NUEVO EN LUGAR DE EDITAR
                         when_str = when.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
                         eta = human_eta(when)
-                        await q.edit_message_text(
+                        await context.bot.send_message(
+                            SOURCE_CHAT_ID,
                             f"✅ **Programación creada**\n\n"
                             f"📅 Fecha: {when_str} ({TZNAME})\n"
                             f"⏰ {eta}\n"
                             f"📦 Mensajes: {len(ids)}",
-                            reply_markup=kb_main(),
                             parse_mode="Markdown"
                         )
                     else:
@@ -502,20 +464,51 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if cmd == "/test_just":
-            try:
-                from justifications_handler import cmd_test_justification
-                await cmd_test_justification(update, context)
-            except ImportError:
-                if len(parts) < 2:
+            # CORREGIDO para funcionar correctamente
+            args = txt.split()[1:] if len(txt.split()) > 1 else []
+            if not args:
+                await context.bot.send_message(
+                    SOURCE_CHAT_ID,
+                    "❌ Uso: /test_just id\nEjemplo: /test_just 123",
+                    parse_mode="Markdown"
+                )
+            else:
+                try:
+                    msg_id = int(args[0])
+                    # Crear link de justificación de prueba
+                    test_text = f"🧪 **PRUEBA DE JUSTIFICACIÓN**\n\n"
+                    test_text += f"CASO #TEST https://t.me/ccjustificaciones/{msg_id}"
+                    
+                    # Procesar el texto para convertirlo
+                    from justifications_handler import process_justification_links
+                    cleaned_text, buttons = process_justification_links(test_text)
+                    
+                    if buttons:
+                        from telegram import InlineKeyboardMarkup
+                        keyboard = InlineKeyboardMarkup([[b] for b in buttons])
+                        await context.bot.send_message(
+                            SOURCE_CHAT_ID,
+                            "🧪 **Test de justificación**\n\nHaz clic en el botón para recibir la justificación:",
+                            reply_markup=keyboard,
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        await context.bot.send_message(
+                            SOURCE_CHAT_ID,
+                            "❌ No se pudo generar el botón de justificación",
+                            parse_mode="Markdown"
+                        )
+                except ValueError:
                     await context.bot.send_message(
                         SOURCE_CHAT_ID,
-                        "Uso: /test_just id",
+                        "❌ ID inválido. Usa un número: /test_just 123",
                         parse_mode="Markdown"
                     )
-                else:
+                except ImportError:
                     await context.bot.send_message(
                         SOURCE_CHAT_ID,
-                        "❌ Módulo justificaciones no disponible"
+                        "❌ Módulo de justificaciones no disponible",
+                        parse_mode="Markdown"
                     )
             await _delete_user_command_if_possible(update, context)
             return
@@ -529,27 +522,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _delete_user_command_if_possible(update, context)
         return
 
-    # ========= ATAJO @@@ =========
-    shortcut_info = parse_shortcut_line(txt)
-    if shortcut_info:
-        label = shortcut_info["label"]
-        url = shortcut_info["url"]
-        
-        drafts = list_drafts(DB_FILE)
-        if drafts:
-            last_draft_id = drafts[-1][0]
-            clear_buttons(DB_FILE, last_draft_id)
-            add_button(DB_FILE, last_draft_id, label, url)
-            await temp_notice(context.bot, f"✅ Botón '{label}' agregado", ttl=5)
-            try:
-                await context.bot.delete_message(chat_id=SOURCE_CHAT_ID, message_id=msg.message_id)
-            except:
-                pass
-        else:
-            await temp_notice(context.bot, "⚠️ No hay borradores para agregar el botón", ttl=5)
-        return
-
-    # ========= GUARDAR BORRADOR =========
+    # ========= GUARDAR BORRADOR (sin @@@ ya que fue eliminado) =========
     snippet = msg.text or msg.caption or ""
     raw_json = json.dumps(msg.to_dict(), ensure_ascii=False)
     save_draft(DB_FILE, msg.message_id, snippet, raw_json)
