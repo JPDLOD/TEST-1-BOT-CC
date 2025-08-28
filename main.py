@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Bot principal - CORREGIDO con todos los comandos y botones funcionando
+# Bot principal - TOTALMENTE CORREGIDO
 
 import json
 import logging
@@ -243,7 +243,7 @@ def text_status() -> str:
     )
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja callbacks de botones - CORREGIDO."""
+    """Maneja callbacks de botones - TOTALMENTE CORREGIDO."""
     q = update.callback_query
     if not q:
         return
@@ -274,7 +274,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(text_schedule(), reply_markup=kb_schedule(), parse_mode="Markdown")
         
         elif data == "m:status":
-            await q.edit_message_text(text_status(), reply_markup=kb_status(), parse_mode="Markdown")
+            try:
+                await q.edit_message_text(text_status(), reply_markup=kb_status(), parse_mode="Markdown")
+            except TelegramError as e:
+                if "Message is not modified" in str(e):
+                    # Si el mensaje ya tiene el mismo contenido, simplemente ignorar
+                    pass
+                else:
+                    raise
         
         elif data == "m:back":
             await q.edit_message_text(text_main(), reply_markup=kb_main(), parse_mode="Markdown")
@@ -295,10 +302,46 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             
             elif data == "s:list":
-                await cmd_programados(context)
+                # Mostrar programados y mantener el menú
+                from scheduler import SCHEDULES
+                from datetime import datetime
+                if not SCHEDULES:
+                    text_prog = "📭 **No hay programaciones pendientes**\n\nVuelve a programar con los botones de abajo."
+                else:
+                    now = datetime.now(tz=TZ)
+                    from core_utils import human_eta
+                    lines = ["🗒 **Programaciones pendientes:**\n"]
+                    for pid, rec in sorted(SCHEDULES.items()):
+                        when = rec["when"].astimezone(TZ).strftime("%Y-%m-%d %H:%M")
+                        ids = rec["ids"]
+                        eta = human_eta(rec["when"], now)
+                        lines.append(f"• #{pid} — {when} ({TZNAME}) — {eta} — {len(ids)} mensajes")
+                    text_prog = "\n".join(lines) + "\n\nUsa los botones para gestionar las programaciones."
+                
+                await q.edit_message_text(text_prog, reply_markup=kb_schedule(), parse_mode="Markdown")
             
             elif data == "s:clear":
-                await cmd_desprogramar(context, "all")
+                # Cancelar todas las programaciones y volver al menú
+                from scheduler import SCHEDULES, SCHEDULED_LOCK
+                count = 0
+                for pid, rec in list(SCHEDULES.items()):
+                    job = rec.get("job")
+                    if job:
+                        try:
+                            job.schedule_removal()
+                        except:
+                            pass
+                    for i in rec.get("ids", []):
+                        SCHEDULED_LOCK.discard(i)
+                    SCHEDULES.pop(pid, None)
+                    count += 1
+                
+                if count > 0:
+                    cancel_text = f"❌ **{count} programacion(es) cancelada(s)**\n\nPuedes programar nuevamente usando los botones."
+                else:
+                    cancel_text = "ℹ️ **No había programaciones para cancelar**\n\nUsa los botones para programar envíos."
+                
+                await q.edit_message_text(cancel_text, reply_markup=kb_schedule(), parse_mode="Markdown")
             
             else:
                 # Atajos de tiempo
@@ -345,10 +388,10 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ========= COMANDOS =========
     if _is_command_text(txt):
-        low = txt.lower()
-
+        low = txt.lower().split()[0]  # Solo tomar el comando, ignorar argumentos
+        
         # COMANDOS PRINCIPALES
-        if low.startswith(("/comandos", "/ayuda", "/help", "/start")):
+        if low in ("/comandos", "/ayuda", "/help", "/start"):
             await context.bot.send_message(
                 SOURCE_CHAT_ID, 
                 text_main(), 
@@ -358,7 +401,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low.startswith(("/listar", "/lista", "/list")):
+        if low in ("/listar", "/lista", "/list"):
             await _cmd_listar(context)
             await _delete_user_command_if_possible(update, context)
             return
@@ -370,7 +413,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low.startswith(("/enviar", "/send")):
+        if low in ("/enviar", "/send"):
             await temp_notice(context.bot, "⏳ Procesando envío…", ttl=4)
             ok, fail = await publicar_todo_activos(context)
             msg_out = f"✅ Publicados {ok}."
@@ -383,12 +426,12 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low.startswith("/preview"):
+        if low == "/preview":
             await _cmd_preview(context)
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low.startswith("/programar"):
+        if low == "/programar":
             parts = txt.split(maxsplit=2)
             if len(parts) >= 3:
                 when_str = f"{parts[1]} {parts[2]}"
@@ -403,7 +446,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low.startswith("/programados"):
+        if low == "/programados":
             await cmd_programados(context)
             await _delete_user_command_if_possible(update, context)
             return
@@ -416,7 +459,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if low.startswith("/id"):
-            if update.channel_post and update.channel_post.reply_to_message:
+            if update.channel_post and update.channel_post.reply_to_message and len(txt.split()) == 1:
                 rid = update.channel_post.reply_to_message.message_id
                 link = deep_link_for_channel_message(SOURCE_CHAT_ID, rid)
                 await context.bot.send_message(
@@ -442,7 +485,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _delete_user_command_if_possible(update, context)
             return
 
-        if low.startswith(("/canales", "/channels", "/targets")):
+        if low in ("/canales", "/channels", "/targets"):
             await context.bot.send_message(
                 SOURCE_CHAT_ID, 
                 text_status(), 
