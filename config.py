@@ -1,51 +1,35 @@
 # -*- coding: utf-8 -*-
 import os
-import re
 from zoneinfo import ZoneInfo
-
-def _to_int(v, default=None):
-    try:
-        return int(str(v).strip())
-    except Exception:
-        return default
-
-def _to_float(v, default=None):
-    try:
-        return float(str(v).strip())
-    except Exception:
-        return default
-
-def _parse_ids(s: str):
-    if not s:
-        return set()
-    parts = re.split(r"[,\s;]+", str(s))
-    out = set()
-    for p in parts:
-        p = p.strip()
-        if p.isdigit() or (p.startswith("-") and p[1:].isdigit()):
-            try:
-                out.add(int(p))
-            except Exception:
-                pass
-    return out
 
 # ====== BOT PRINCIPAL (reenviador) ======
 BOT_TOKEN = os.environ["BOT_TOKEN"]  # obligatorio
-SOURCE_CHAT_ID = _to_int(os.environ.get("SOURCE_CHAT_ID"))
-TARGET_CHAT_ID = _to_int(os.environ.get("TARGET_CHAT_ID"))
-BACKUP_CHAT_ID = _to_int(os.environ.get("BACKUP_CHAT_ID"))
-PREVIEW_CHAT_ID = _to_int(os.environ.get("PREVIEW_CHAT_ID"))
-
-PAUSE = _to_float(os.environ.get("PAUSE"), 0.6)
+SOURCE_CHAT_ID = int(os.environ.get("SOURCE_CHAT_ID", "-1002918387207"))
+TARGET_CHAT_ID = int(os.environ.get("TARGET_CHAT_ID", "-1003048176186"))
+BACKUP_CHAT_ID = int(os.environ.get("BACKUP_CHAT_ID", "-1002923147603"))
+PREVIEW_CHAT_ID = int(os.environ.get("PREVIEW_CHAT_ID", "-1002953653419"))
 
 # ====== BOT DE JUSTIFICACIONES (privado) ======
-JUST_BOT_TOKEN = os.environ.get("JUST_BOT_TOKEN")  # obligatorio para ese bot
-JUSTIFICATIONS_CHAT_ID = _to_int(os.environ.get("JUSTIFICATIONS_CHAT_ID"))
-JUST_ADMIN_IDS = _parse_ids(os.environ.get("JUST_ADMIN_IDS", ""))
-JUST_AUTO_DELETE_MINUTES = _to_int(os.environ.get("JUST_AUTO_DELETE_MINUTES"), 0)
+JUST_BOT_TOKEN = os.environ.get("JUST_BOT_TOKEN", "")
+JUSTIFICATIONS_CHAT_ID = int(os.environ.get("JUSTIFICATIONS_CHAT_ID", "-1003058530208"))
+JUSTIFICATIONS_BOT_USERNAME = "clinicase_bot"  # Username del bot de justificaciones
 
-# ====== AUTO-DELETE del principal (si lo usas en algún handler) ======
-AUTO_DELETE_MINUTES = _to_int(os.environ.get("AUTO_DELETE_MINUTES"), 0)
+# Admin IDs para el bot de justificaciones
+JUST_ADMIN_IDS = set()
+admin_ids_str = os.environ.get("JUST_ADMIN_IDS", "")
+if admin_ids_str:
+    for id_str in admin_ids_str.replace(",", " ").split():
+        try:
+            JUST_ADMIN_IDS.add(int(id_str.strip()))
+        except:
+            pass
+
+JUST_AUTO_DELETE_MINUTES = int(os.environ.get("JUST_AUTO_DELETE_MINUTES", "10"))
+AUTO_DELETE_MINUTES = int(os.environ.get("AUTO_DELETE_MINUTES", "10"))
+
+# ====== General ======
+PAUSE = float(os.environ.get("PAUSE", "0.6"))
+DB_FILE = os.environ.get("DB_FILE", "drafts.db")
 
 # ====== Zona horaria ======
 TZNAME = os.environ.get("TIMEZONE", "America/Bogota")
