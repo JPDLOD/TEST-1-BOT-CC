@@ -182,6 +182,7 @@ async def handle_poll_update(update, context):
         return
     
     poll = update.message.poll
+    logger.info(f"Poll update received: {poll}")
     source_chat = update.message.chat
     
     poll_id = str(poll.id)
