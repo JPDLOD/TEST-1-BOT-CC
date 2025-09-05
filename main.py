@@ -576,7 +576,7 @@ def main():
     
     # Handler principal del canal
     # Polls posted in a channel
-    app.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.POLL, handle_channel))
+    app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
 
     # Poll lifecycle updates (correct answer, closed, vote counts for anonymous polls)
     app.add_handler(PollHandler(handle_poll_update))
