@@ -177,6 +177,7 @@ def detect_voted_polls_on_save(message_id: int, raw_json: str):
         logger.error(f"Error: {e}")
 
 async def handle_poll_update(update, context):
+    logger.info(f"Inside handle_poll_update")
     if not update.message or not update.message.poll:
         return
     

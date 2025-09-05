@@ -344,6 +344,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========= Handler principal del canal =========
 async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja mensajes del canal BORRADOR."""
+    logger.info("Inside handle_channel")
     msg = update.channel_post
     if not msg or msg.chat_id != SOURCE_CHAT_ID:
         return
@@ -563,8 +564,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     # Handlers para encuestas
-    app.add_handler(MessageHandler(filters.POLL, handle_poll_update))
-    app.add_handler(PollAnswerHandler(handle_poll_answer_update))
+    
     
     # Handlers de justificaciones
     try:
@@ -575,8 +575,14 @@ def main():
         logger.warning("⚠️ Justificaciones no disponibles")
     
     # Handler principal del canal
-    app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
-    
+    # Polls posted in a channel
+    app.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.POLL, handle_channel))
+
+    # Poll lifecycle updates (correct answer, closed, vote counts for anonymous polls)
+    app.add_handler(PollHandler(handle_poll_update))
+
+    # Non-anonymous poll answers (user votes)
+    app.add_handler(PollAnswerHandler(handle_poll_answer_update))
     # Handler para callbacks (botones)
     app.add_handler(CallbackQueryHandler(handle_callback))
     
