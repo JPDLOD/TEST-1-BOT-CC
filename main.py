@@ -524,7 +524,10 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ========= GUARDAR BORRADOR (sin @@@ ya que fue eliminado) =========
     snippet = msg.text or msg.caption or ""
-    raw_json = json.dumps(msg.to_dict(), ensure_ascii=False)
+    raw_json = msg.to_dict()
+    if msg.poll:
+        raw_json["poll"] = msg.poll.to_dict()
+    raw_json = json.dumps(raw_json, ensure_ascii=False)    
     save_draft(DB_FILE, msg.message_id, snippet, raw_json)
     detect_voted_polls_on_save(msg.message_id, raw_json)
     logger.info(f"Guardado en borrador: {msg.message_id}")
