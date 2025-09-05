@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import sqlite3
+import json
 from typing import List, Tuple, Optional
 
 _schema = """
@@ -92,3 +93,11 @@ def get_draft_snippet(path: str, message_id: int) -> Optional[str]:
     return row[0] if row else None
 
 # FUNCIONES DE BOTONES REMOVIDAS - YA NO SE NECESITAN
+def update_draft_json(path: str, message_id: int, new_json: dict):
+    """Replace the raw_json field for an existing draft."""
+    c = _conn(path)
+    c.execute(
+        "UPDATE drafts SET raw_json=? WHERE message_id=?",
+        (json.dumps(new_json, ensure_ascii=False), message_id)
+    )
+    c.commit()

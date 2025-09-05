@@ -9,7 +9,7 @@ from telegram.error import RetryAfter, TimedOut, NetworkError, TelegramError
 from telegram.ext import ContextTypes
 
 from config import DB_FILE, SOURCE_CHAT_ID, TARGET_CHAT_ID, BACKUP_CHAT_ID, PAUSE, JUSTIFICATIONS_BOT_USERNAME
-from database import get_unsent_drafts, mark_sent
+from database import _conn, get_unsent_drafts, mark_sent, update_draft_json
 
 logger = logging.getLogger(__name__)
 
@@ -177,20 +177,31 @@ def detect_voted_polls_on_save(message_id: int, raw_json: str):
         logger.error(f"Error: {e}")
 
 async def handle_poll_update(update, context):
-    """Handler para actualizaciones de encuestas."""
-    if not update.poll:
-        return
-    
     poll = update.poll
     poll_id = str(poll.id)
-    
+
     message_id = POLL_ID_TO_MESSAGE_ID.get(poll_id)
     if not message_id:
         return
-    
-    if hasattr(poll, 'correct_option_id') and poll.correct_option_id is not None:
+
+    if poll.correct_option_id is not None:
+        # Load the old draft JSON
+        c = _conn(DB_FILE)
+        cur = c.execute("SELECT raw_json FROM drafts WHERE message_id=?", (message_id,))
+        row = cur.fetchone()
+        if row:
+            raw_json = json.loads(row[0])
+
+            # Merge in the correct_option_id
+            if "poll" in raw_json:
+                raw_json["poll"]["correct_option_id"] = poll.correct_option_id
+
+            # Save back to DB
+            update_draft_json(DB_FILE, message_id, raw_json)
+
         DETECTED_CORRECT_ANSWERS[message_id] = poll.correct_option_id
         logger.info(f"Quiz {message_id}: correct={poll.correct_option_id}")
+
 
 async def handle_poll_answer_update(update, context):
     """Handler para respuestas de usuarios."""
