@@ -177,7 +177,12 @@ def detect_voted_polls_on_save(message_id: int, raw_json: str):
         logger.error(f"Error: {e}")
 
 async def handle_poll_update(update, context):
-    poll = update.poll
+    if not update.message or not update.message.poll:
+        return
+    
+    poll = update.message.poll
+    source_chat = update.message.chat
+    
     poll_id = str(poll.id)
 
     message_id = POLL_ID_TO_MESSAGE_ID.get(poll_id)

@@ -563,7 +563,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     # Handlers para encuestas
-    app.add_handler(PollHandler(handle_poll_update))
+    app.add_handler(MessageHandler(filters.POLL, handle_poll_update))
     app.add_handler(PollAnswerHandler(handle_poll_answer_update))
     
     # Handlers de justificaciones
