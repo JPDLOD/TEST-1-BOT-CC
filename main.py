@@ -527,6 +527,7 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     snippet = msg.text or msg.caption or ""
     raw_json = msg.to_dict()
     if msg.poll:
+        logger.info(f"Poll: {msg.poll}")
         raw_json["poll"] = msg.poll.to_dict()
     raw_json = json.dumps(raw_json, ensure_ascii=False)    
     save_draft(DB_FILE, msg.message_id, snippet, raw_json)
