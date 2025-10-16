@@ -4,7 +4,7 @@ import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from config import DB_FILE, ADMIN_USER_IDS
+from config import ADMIN_USER_IDS
 from database import set_user_limit, set_user_subscriber, get_or_create_user, get_all_case_ids
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,6 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Estadísticas", callback_data="admin_stats")],
         [InlineKeyboardButton("👥 Gestionar usuarios", callback_data="admin_users")],
-        [InlineKeyboardButton("📢 Enviar anuncio", callback_data="admin_announce")],
         [InlineKeyboardButton("📚 Info casos", callback_data="admin_cases")]
     ])
     
@@ -42,9 +41,9 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     if data == "admin_stats":
         from database import get_all_users, get_subscribers
-        total_users = len(get_all_users(DB_FILE))
-        subs = len(get_subscribers(DB_FILE))
-        cases = len(get_all_case_ids(DB_FILE))
+        total_users = len(get_all_users())
+        subs = len(get_subscribers())
+        cases = len(get_all_case_ids())
         
         await query.edit_message_text(
             f"📊 Estadísticas:\n\n"
@@ -62,22 +61,8 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             "/set_sub @user 0 - Desactivar subscripción"
         )
     
-    elif data == "admin_announce":
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Canal FREE", callback_data="send_free")],
-            [InlineKeyboardButton("⭐ Canal SUBS", callback_data="send_subs")],
-            [InlineKeyboardButton("🤖 Bot FREE", callback_data="send_bot_free")],
-            [InlineKeyboardButton("💎 Bot SUBS", callback_data="send_bot_subs")]
-        ])
-        
-        await query.edit_message_text(
-            "📢 Enviar Anuncio\n\n"
-            "Selecciona destino:",
-            reply_markup=keyboard
-        )
-    
     elif data == "admin_cases":
-        cases = get_all_case_ids(DB_FILE)
+        cases = get_all_case_ids()
         await query.edit_message_text(
             f"📚 Casos en base de datos: {len(cases)}\n\n"
             f"Primeros 10:\n" + "\n".join(cases[:10])
@@ -94,17 +79,24 @@ async def cmd_set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = context.args[0].replace("@", "")
     limit = int(context.args[1])
     
-    from database import _conn
-    c = _conn(DB_FILE)
-    cur = c.execute("SELECT user_id FROM users WHERE username=?", (username,))
-    row = cur.fetchone()
+    from database import _get_conn
+    conn = _get_conn()
+    
+    from database import USE_POSTGRES
+    if USE_POSTGRES:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM users WHERE username=%s", (username,))
+            row = cur.fetchone()
+    else:
+        cur = conn.execute("SELECT user_id FROM users WHERE username=?", (username,))
+        row = cur.fetchone()
     
     if not row:
         await update.message.reply_text("❌ Usuario no encontrado")
         return
     
-    user_id = row[0]
-    set_user_limit(DB_FILE, user_id, limit)
+    user_id = row['user_id'] if USE_POSTGRES else row[0]
+    set_user_limit(user_id, limit)
     
     await update.message.reply_text(f"✅ Límite de @{username} actualizado a {limit}")
 
@@ -119,17 +111,23 @@ async def cmd_set_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = context.args[0].replace("@", "")
     is_sub = int(context.args[1])
     
-    from database import _conn
-    c = _conn(DB_FILE)
-    cur = c.execute("SELECT user_id FROM users WHERE username=?", (username,))
-    row = cur.fetchone()
+    from database import _get_conn, USE_POSTGRES
+    conn = _get_conn()
+    
+    if USE_POSTGRES:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM users WHERE username=%s", (username,))
+            row = cur.fetchone()
+    else:
+        cur = conn.execute("SELECT user_id FROM users WHERE username=?", (username,))
+        row = cur.fetchone()
     
     if not row:
         await update.message.reply_text("❌ Usuario no encontrado")
         return
     
-    user_id = row[0]
-    set_user_subscriber(DB_FILE, user_id, is_sub)
+    user_id = row['user_id'] if USE_POSTGRES else row[0]
+    set_user_subscriber(user_id, is_sub)
     
     status = "activada" if is_sub else "desactivada"
     await update.message.reply_text(f"✅ Subscripción de @{username} {status}")
