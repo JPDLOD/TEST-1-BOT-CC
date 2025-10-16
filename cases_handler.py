@@ -2,26 +2,31 @@
 import logging
 import random
 import re
-from typing import Optional, Tuple, List
+import asyncio
+from typing import Optional, Tuple, List, Set
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
-from telegram.error import TelegramError
+from telegram.error import TelegramError, RetryAfter
 
 from config import JUSTIFICATIONS_CHAT_ID
 from database import (
     get_all_case_ids, get_user_sent_cases, get_case_by_id,
     get_daily_progress, increment_daily_progress, get_or_create_user,
-    save_user_sent_case, count_cases
+    save_user_sent_case, count_cases, delete_case
 )
 
 logger = logging.getLogger(__name__)
 
-# Patrones actualizados
+# Patrones
 CASE_PATTERN = re.compile(r'###CASE[_\s]*([A-Z0-9_-]+)', re.IGNORECASE)
 CORRECT_PATTERN = re.compile(r'#([A-D])#', re.IGNORECASE)
 ID_CLEANUP_PATTERN = re.compile(r'###CASE[_\s]*[A-Z0-9_-]+|#[A-D]#', re.IGNORECASE)
 
 user_sessions = {}
+deleted_cases_cache: Set[str] = set()  # Cache para no repetir logs
+
+MAX_RETRIES = 3
+RETRY_DELAY = 2
 
 async def cmd_random_cases(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -50,12 +55,10 @@ async def cmd_random_cases(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📊 Casos en BD: {total}\n\n"
             f"💡 **Formatos aceptados:**\n"
             f"`###CASE_0001 #A#`\n"
-            f"`###CASE_0001_PED_DENGUE #C#`\n"
-            f"`###CASE CASO_GYO_0008 #B#`\n\n"
+            f"`###CASE_0001_PED_DENGUE #C#`\n\n"
             f"📌 **Recuerda:**\n"
             f"• Usa `#LETRA#` para la respuesta\n"
-            f"• Las letras son: A, B, C o D\n"
-            f"• El bot detecta casos automáticamente",
+            f"• Las letras son: A, B, C o D",
             parse_mode="Markdown",
             reply_markup=ReplyKeyboardRemove()
         )
@@ -67,13 +70,6 @@ async def cmd_random_cases(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not available:
         available = all_cases
         await update.message.reply_text("🎉 ¡Completaste todos los casos! Reiniciando...")
-    
-    if not available:
-        await update.message.reply_text(
-            "❌ No hay casos disponibles.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return
     
     cases_to_send = min(5, limit - today_solved)
     selected = random.sample(list(available), min(cases_to_send, len(available)))
@@ -102,11 +98,10 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     case_data = get_case_by_id(case_id)
     
     if not case_data:
-        await context.bot.send_message(
-            user_id, 
-            "❌ Caso no encontrado",
-            reply_markup=ReplyKeyboardRemove()
-        )
+        # Caso no existe en DB → pasar al siguiente
+        logger.warning(f"⚠️ Caso {case_id} no existe en DB")
+        session["current_index"] += 1
+        await send_case(update, context, user_id)
         return
     
     _, message_id, correct_answer = case_data
@@ -114,49 +109,87 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     session["current_case"] = case_id
     session["correct_answer"] = correct_answer
     
-    try:
-        # Forward temporal para extraer info
-        msg = await context.bot.forward_message(
-            chat_id=user_id,
-            from_chat_id=JUSTIFICATIONS_CHAT_ID,
-            message_id=message_id
-        )
-        
-        text = msg.text or msg.caption or ""
-        clean_text = ID_CLEANUP_PATTERN.sub('', text).strip()
-        
-        # Extraer file_ids ANTES de borrar
-        photo_id = msg.photo[-1].file_id if msg.photo else None
-        doc_id = msg.document.file_id if msg.document else None
-        
-        # BORRAR forward inmediatamente
+    # SISTEMA DE REINTENTOS CON DETECCIÓN DE ELIMINACIÓN
+    tries = 0
+    while tries < MAX_RETRIES:
         try:
-            await context.bot.delete_message(user_id, msg.message_id)
-        except:
-            pass
-        
-        # Enviar versión limpia
-        if photo_id:
-            await context.bot.send_photo(
+            # Forward temporal para extraer info
+            msg = await context.bot.forward_message(
                 chat_id=user_id,
-                photo=photo_id,
-                caption=clean_text if clean_text else None
+                from_chat_id=JUSTIFICATIONS_CHAT_ID,
+                message_id=message_id
             )
-        elif doc_id:
-            await context.bot.send_document(
-                chat_id=user_id,
-                document=doc_id,
-                caption=clean_text if clean_text else None
-            )
-        elif clean_text:
-            await context.bot.send_message(chat_id=user_id, text=clean_text)
-        
-        # Guardar que enviamos este caso
-        save_user_sent_case(user_id, case_id)
-        
-    except TelegramError as e:
-        logger.error(f"Error enviando caso: {e}")
-        return
+            
+            text = msg.text or msg.caption or ""
+            clean_text = ID_CLEANUP_PATTERN.sub('', text).strip()
+            
+            # Extraer file_ids ANTES de borrar
+            photo_id = msg.photo[-1].file_id if msg.photo else None
+            doc_id = msg.document.file_id if msg.document else None
+            
+            # BORRAR forward inmediatamente
+            try:
+                await context.bot.delete_message(user_id, msg.message_id)
+            except:
+                pass
+            
+            # Enviar versión limpia
+            if photo_id:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=photo_id,
+                    caption=clean_text if clean_text else None
+                )
+            elif doc_id:
+                await context.bot.send_document(
+                    chat_id=user_id,
+                    document=doc_id,
+                    caption=clean_text if clean_text else None
+                )
+            elif clean_text:
+                await context.bot.send_message(chat_id=user_id, text=clean_text)
+            
+            # Guardar que enviamos este caso
+            save_user_sent_case(user_id, case_id)
+            
+            # ÉXITO → salir del while
+            break
+            
+        except RetryAfter as e:
+            # Rate limit → esperar tiempo específico
+            wait = e.retry_after
+            logger.warning(f"⚠️ Rate limit: esperar {wait}s")
+            await asyncio.sleep(wait + 1)
+            # NO cuenta como intento fallido
+            continue
+            
+        except TelegramError as e:
+            error = str(e).lower()
+            
+            # CASO ELIMINADO
+            if "message to forward not found" in error or "message not found" in error:
+                # Log SOLO primera vez
+                if case_id not in deleted_cases_cache:
+                    logger.warning(f"⚠️ CASO ELIMINADO: {case_id} (msg_id: {message_id})")
+                    deleted_cases_cache.add(case_id)
+                    delete_case(case_id)
+                
+                # Pasar al SIGUIENTE caso
+                session["current_index"] += 1
+                await send_case(update, context, user_id)
+                return
+            
+            # TIMEOUT/RED → reintentar
+            tries += 1
+            if tries < MAX_RETRIES:
+                logger.warning(f"⚠️ Intento {tries}/{MAX_RETRIES} falló: {error}")
+                await asyncio.sleep(RETRY_DELAY)
+            else:
+                # Falló 3 veces → siguiente caso
+                logger.error(f"❌ TIMEOUT persistente: {case_id} - Saltando al siguiente")
+                session["current_index"] += 1
+                await send_case(update, context, user_id)
+                return
     
     # REPLY KEYBOARD (botones en la barra inferior)
     keyboard = [
@@ -259,45 +292,3 @@ async def finish_session(update: Update, context: ContextTypes.DEFAULT_TYPE, use
     )
     
     del user_sessions[user_id]
-```
-
----
-
-## 4️⃣ **runtime.txt**
-```
-python-3.11
-```
-
----
-
-## 5️⃣ **requirements.txt**
-```
-python-telegram-bot[job-queue]==21.6
-psycopg2-binary==2.9.10
-```
-
----
-
-## 🎯 INSTRUCCIONES
-
-1. **Copia estos 5 archivos** exactamente como están
-2. **Sube a GitHub**
-3. **Deploy en Render**
-4. **Configura las variables de entorno en Render:**
-```
-BOT_TOKEN=8364968927:AAFSDwTr9TZfkbQfpe2EWMVZEkYnTXjNCKw
-DATABASE_URL=(automático)
-JUSTIFICATIONS_CHAT_ID=-1003058530208
-FREE_CHANNEL_ID=-1002717125281
-SUBS_CHANNEL_ID=-1003042227035
-ADMIN_USER_IDS=TU_USER_ID
-DAILY_CASE_LIMIT=5
-TIMEZONE=America/Bogota
-PAUSE=0.3
-```
-
-5. **Envia un caso con este formato:**
-```
-###CASE_0001 #C#
-
-Pregunta del caso aquí...
