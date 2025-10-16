@@ -11,7 +11,9 @@ SUBS_CHANNEL_ID = int(os.environ.get("SUBS_CHANNEL_ID", "-1003042227035"))
 
 ADMIN_USER_IDS = list(map(int, os.environ.get("ADMIN_USER_IDS", "").split(","))) if os.environ.get("ADMIN_USER_IDS") else []
 
-DB_FILE = os.environ.get("DB_FILE", "clinicas.db")
+# PERSISTENCIA: PostgreSQL (Render/Supabase) o SQLite (local)
+DATABASE_URL = os.environ.get("DATABASE_URL")  # PostgreSQL URL
+DB_FILE = os.environ.get("DB_FILE", "clinicas.db")  # SQLite fallback
 
 DAILY_CASE_LIMIT = int(os.environ.get("DAILY_CASE_LIMIT", "5"))
 
