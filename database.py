@@ -1,19 +1,8 @@
 # -*- coding: utf-8 -*-
 import sqlite3
-import json
-from typing import List, Tuple, Optional
-
-_schema = """
-CREATE TABLE IF NOT EXISTS drafts (
-  message_id INTEGER PRIMARY KEY,
-  snippet    TEXT,
-  raw_json   TEXT,
-  sent       INTEGER NOT NULL DEFAULT 0,
-  deleted    INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-);
-CREATE INDEX IF NOT EXISTS idx_drafts_sent_deleted ON drafts(sent, deleted);
-"""
+from typing import List, Tuple, Optional, Set
+from datetime import datetime
+from config import TZ
 
 _conn_cache = {}
 
@@ -27,77 +16,194 @@ def _conn(path: str) -> sqlite3.Connection:
     _conn_cache[path] = conn
     return conn
 
+_schema = """
+CREATE TABLE IF NOT EXISTS clinical_cases (
+  case_id TEXT PRIMARY KEY,
+  message_id INTEGER NOT NULL,
+  specialty TEXT,
+  topic TEXT,
+  correct_answer TEXT,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cases_specialty ON clinical_cases(specialty);
+
+CREATE TABLE IF NOT EXISTS justifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  case_id TEXT NOT NULL,
+  message_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_just_case ON justifications(case_id);
+
+CREATE TABLE IF NOT EXISTS users (
+  user_id INTEGER PRIMARY KEY,
+  username TEXT,
+  first_name TEXT,
+  is_subscriber INTEGER DEFAULT 0,
+  daily_limit INTEGER DEFAULT 5,
+  total_cases INTEGER DEFAULT 0,
+  correct_answers INTEGER DEFAULT 0,
+  last_interaction INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+
+CREATE TABLE IF NOT EXISTS user_responses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  case_id TEXT NOT NULL,
+  answer TEXT,
+  is_correct INTEGER,
+  timestamp INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_resp_user ON user_responses(user_id);
+CREATE INDEX IF NOT EXISTS idx_resp_case ON user_responses(case_id);
+
+CREATE TABLE IF NOT EXISTS case_stats (
+  case_id TEXT,
+  answer TEXT,
+  count INTEGER DEFAULT 0,
+  PRIMARY KEY (case_id, answer)
+);
+
+CREATE TABLE IF NOT EXISTS daily_progress (
+  user_id INTEGER,
+  date TEXT,
+  cases_solved INTEGER DEFAULT 0,
+  PRIMARY KEY (user_id, date)
+);
+"""
+
 def init_db(path: str):
     c = _conn(path)
     c.executescript(_schema)
     c.commit()
 
-def save_draft(path: str, message_id: int, snippet: str, raw_json: str):
+def save_case(path: str, case_id: str, message_id: int, specialty: str = "", topic: str = "", correct_answer: str = ""):
     c = _conn(path)
     c.execute(
-        "INSERT OR IGNORE INTO drafts(message_id, snippet, raw_json) VALUES (?,?,?)",
-        (message_id, snippet or "", raw_json or "")
+        "INSERT OR REPLACE INTO clinical_cases(case_id, message_id, specialty, topic, correct_answer) VALUES (?,?,?,?,?)",
+        (case_id, message_id, specialty, topic, correct_answer)
     )
     c.commit()
 
-def get_unsent_drafts(path: str) -> List[Tuple[int, str, str]]:
+def save_justification(path: str, case_id: str, message_id: int):
     c = _conn(path)
-    cur = c.execute(
-        "SELECT message_id, snippet, raw_json FROM drafts WHERE sent=0 AND deleted=0 ORDER BY message_id ASC"
-    )
-    return list(cur.fetchall())
-
-def mark_sent(path: str, ids: List[int]):
-    if not ids:
-        return
-    c = _conn(path)
-    q = "UPDATE drafts SET sent=1 WHERE message_id IN (%s)" % ",".join("?" * len(ids))
-    c.execute(q, ids)
+    c.execute("INSERT INTO justifications(case_id, message_id) VALUES (?,?)", (case_id, message_id))
     c.commit()
 
-def list_drafts(path: str) -> List[Tuple[int, str]]:
+def get_all_case_ids(path: str) -> List[str]:
     c = _conn(path)
-    cur = c.execute(
-        "SELECT message_id, COALESCE(snippet,'') FROM drafts WHERE sent=0 AND deleted=0 ORDER BY message_id ASC"
-    )
-    return list(cur.fetchall())
+    cur = c.execute("SELECT case_id FROM clinical_cases ORDER BY case_id")
+    return [row[0] for row in cur.fetchall()]
 
-def mark_deleted(path: str, message_id: int):
+def get_case_by_id(path: str, case_id: str) -> Optional[Tuple]:
     c = _conn(path)
-    c.execute("UPDATE drafts SET deleted=1 WHERE message_id=?", (message_id,))
-    c.commit()
+    cur = c.execute("SELECT case_id, message_id, correct_answer FROM clinical_cases WHERE case_id=?", (case_id,))
+    return cur.fetchone()
 
-def restore_draft(path: str, message_id: int):
+def get_justifications_for_case(path: str, case_id: str) -> List[int]:
     c = _conn(path)
-    c.execute("UPDATE drafts SET deleted=0 WHERE message_id=?", (message_id,))
-    c.commit()
+    cur = c.execute("SELECT message_id FROM justifications WHERE case_id=? ORDER BY id", (case_id,))
+    return [row[0] for row in cur.fetchall()]
 
-def get_last_deleted(path: str) -> Optional[int]:
+def get_user_sent_cases(path: str, user_id: int) -> Set[str]:
     c = _conn(path)
-    cur = c.execute(
-        "SELECT message_id FROM drafts WHERE sent=0 AND deleted=1 ORDER BY created_at DESC LIMIT 1"
-    )
-    row = cur.fetchone()
-    return int(row[0]) if row else None
+    cur = c.execute("SELECT DISTINCT case_id FROM user_responses WHERE user_id=?", (user_id,))
+    return {row[0] for row in cur.fetchall()}
 
-def count_deleted_unsent(path: str) -> int:
-    c = _conn(path)
-    cur = c.execute("SELECT COUNT(*) FROM drafts WHERE sent=0 AND deleted=1")
-    row = cur.fetchone()
-    return int(row[0] or 0)
-
-def get_draft_snippet(path: str, message_id: int) -> Optional[str]:
-    c = _conn(path)
-    cur = c.execute("SELECT snippet FROM drafts WHERE message_id=?", (message_id,))
-    row = cur.fetchone()
-    return row[0] if row else None
-
-# FUNCIONES DE BOTONES REMOVIDAS - YA NO SE NECESITAN
-def update_draft_json(path: str, message_id: int, new_json: dict):
-    """Replace the raw_json field for an existing draft."""
+def save_user_response(path: str, user_id: int, case_id: str, answer: str, is_correct: int):
     c = _conn(path)
     c.execute(
-        "UPDATE drafts SET raw_json=? WHERE message_id=?",
-        (json.dumps(new_json, ensure_ascii=False), message_id)
+        "INSERT INTO user_responses(user_id, case_id, answer, is_correct) VALUES (?,?,?,?)",
+        (user_id, case_id, answer, is_correct)
     )
     c.commit()
+
+def increment_case_stat(path: str, case_id: str, answer: str):
+    c = _conn(path)
+    c.execute(
+        "INSERT INTO case_stats(case_id, answer, count) VALUES (?,?,1) ON CONFLICT(case_id, answer) DO UPDATE SET count=count+1",
+        (case_id, answer)
+    )
+    c.commit()
+
+def get_case_stats(path: str, case_id: str) -> dict:
+    c = _conn(path)
+    cur = c.execute("SELECT answer, count FROM case_stats WHERE case_id=?", (case_id,))
+    stats = {"A": 0, "B": 0, "C": 0, "D": 0}
+    for answer, count in cur.fetchall():
+        stats[answer] = count
+    return stats
+
+def get_or_create_user(path: str, user_id: int, username: str = "", first_name: str = "") -> dict:
+    c = _conn(path)
+    cur = c.execute("SELECT user_id, username, first_name, is_subscriber, daily_limit, total_cases, correct_answers FROM users WHERE user_id=?", (user_id,))
+    row = cur.fetchone()
+    if row:
+        return {
+            "user_id": row[0],
+            "username": row[1],
+            "first_name": row[2],
+            "is_subscriber": row[3],
+            "daily_limit": row[4],
+            "total_cases": row[5],
+            "correct_answers": row[6]
+        }
+    c.execute(
+        "INSERT INTO users(user_id, username, first_name) VALUES (?,?,?)",
+        (user_id, username, first_name)
+    )
+    c.commit()
+    return {
+        "user_id": user_id,
+        "username": username,
+        "first_name": first_name,
+        "is_subscriber": 0,
+        "daily_limit": 5,
+        "total_cases": 0,
+        "correct_answers": 0
+    }
+
+def get_daily_progress(path: str, user_id: int) -> int:
+    today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+    c = _conn(path)
+    cur = c.execute("SELECT cases_solved FROM daily_progress WHERE user_id=? AND date=?", (user_id, today))
+    row = cur.fetchone()
+    return row[0] if row else 0
+
+def increment_daily_progress(path: str, user_id: int):
+    today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+    c = _conn(path)
+    c.execute(
+        "INSERT INTO daily_progress(user_id, date, cases_solved) VALUES (?,?,1) ON CONFLICT(user_id, date) DO UPDATE SET cases_solved=cases_solved+1",
+        (user_id, today)
+    )
+    c.commit()
+
+def set_user_limit(path: str, user_id: int, limit: int):
+    c = _conn(path)
+    c.execute("UPDATE users SET daily_limit=? WHERE user_id=?", (limit, user_id))
+    c.commit()
+
+def set_user_subscriber(path: str, user_id: int, is_sub: int):
+    c = _conn(path)
+    c.execute("UPDATE users SET is_subscriber=? WHERE user_id=?", (is_sub, user_id))
+    c.commit()
+
+def update_user_stats(path: str, user_id: int, is_correct: int):
+    c = _conn(path)
+    if is_correct:
+        c.execute("UPDATE users SET total_cases=total_cases+1, correct_answers=correct_answers+1 WHERE user_id=?", (user_id,))
+    else:
+        c.execute("UPDATE users SET total_cases=total_cases+1 WHERE user_id=?", (user_id,))
+    c.commit()
+
+def get_all_users(path: str) -> List[int]:
+    c = _conn(path)
+    cur = c.execute("SELECT user_id FROM users")
+    return [row[0] for row in cur.fetchall()]
+
+def get_subscribers(path: str) -> List[int]:
+    c = _conn(path)
+    cur = c.execute("SELECT user_id FROM users WHERE is_subscriber=1")
+    return [row[0] for row in cur.fetchall()]
