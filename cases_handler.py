@@ -3,7 +3,7 @@ import logging
 import random
 import re
 import asyncio
-from typing import Optional, Tuple, List, Set
+from typing import Set
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError, RetryAfter
@@ -12,18 +12,18 @@ from config import JUSTIFICATIONS_CHAT_ID
 from database import (
     get_all_case_ids, get_user_sent_cases, get_case_by_id,
     get_daily_progress, increment_daily_progress, get_or_create_user,
-    save_user_sent_case, count_cases, delete_case
+    save_user_sent_case, count_cases, delete_case,
+    save_user_response, increment_case_stat, update_user_stats, get_case_stats
 )
 
 logger = logging.getLogger(__name__)
 
-# Patrones
 CASE_PATTERN = re.compile(r'###CASE[_\s]*([A-Z0-9_-]+)', re.IGNORECASE)
 CORRECT_PATTERN = re.compile(r'#([A-D])#', re.IGNORECASE)
 ID_CLEANUP_PATTERN = re.compile(r'###CASE[_\s]*[A-Z0-9_-]+|#[A-D]#', re.IGNORECASE)
 
 user_sessions = {}
-deleted_cases_cache: Set[str] = set()  # Cache para no repetir logs
+deleted_cases_cache: Set[str] = set()
 
 MAX_RETRIES = 3
 RETRY_DELAY = 2
@@ -98,7 +98,6 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     case_data = get_case_by_id(case_id)
     
     if not case_data:
-        # Caso no existe en DB → pasar al siguiente
         logger.warning(f"⚠️ Caso {case_id} no existe en DB")
         session["current_index"] += 1
         await send_case(update, context, user_id)
@@ -109,11 +108,9 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     session["current_case"] = case_id
     session["correct_answer"] = correct_answer
     
-    # SISTEMA DE REINTENTOS CON DETECCIÓN DE ELIMINACIÓN
     tries = 0
     while tries < MAX_RETRIES:
         try:
-            # Forward temporal para extraer info
             msg = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
@@ -123,17 +120,14 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
             text = msg.text or msg.caption or ""
             clean_text = ID_CLEANUP_PATTERN.sub('', text).strip()
             
-            # Extraer file_ids ANTES de borrar
             photo_id = msg.photo[-1].file_id if msg.photo else None
             doc_id = msg.document.file_id if msg.document else None
             
-            # BORRAR forward inmediatamente
             try:
                 await context.bot.delete_message(user_id, msg.message_id)
             except:
                 pass
             
-            # Enviar versión limpia
             if photo_id:
                 await context.bot.send_photo(
                     chat_id=user_id,
@@ -149,49 +143,38 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
             elif clean_text:
                 await context.bot.send_message(chat_id=user_id, text=clean_text)
             
-            # Guardar que enviamos este caso
             save_user_sent_case(user_id, case_id)
-            
-            # ÉXITO → salir del while
             break
             
         except RetryAfter as e:
-            # Rate limit → esperar tiempo específico
             wait = e.retry_after
             logger.warning(f"⚠️ Rate limit: esperar {wait}s")
             await asyncio.sleep(wait + 1)
-            # NO cuenta como intento fallido
             continue
             
         except TelegramError as e:
             error = str(e).lower()
             
-            # CASO ELIMINADO
             if "message to forward not found" in error or "message not found" in error:
-                # Log SOLO primera vez
                 if case_id not in deleted_cases_cache:
                     logger.warning(f"⚠️ CASO ELIMINADO: {case_id} (msg_id: {message_id})")
                     deleted_cases_cache.add(case_id)
                     delete_case(case_id)
                 
-                # Pasar al SIGUIENTE caso
                 session["current_index"] += 1
                 await send_case(update, context, user_id)
                 return
             
-            # TIMEOUT/RED → reintentar
             tries += 1
             if tries < MAX_RETRIES:
                 logger.warning(f"⚠️ Intento {tries}/{MAX_RETRIES} falló: {error}")
                 await asyncio.sleep(RETRY_DELAY)
             else:
-                # Falló 3 veces → siguiente caso
                 logger.error(f"❌ TIMEOUT persistente: {case_id} - Saltando al siguiente")
                 session["current_index"] += 1
                 await send_case(update, context, user_id)
                 return
     
-    # REPLY KEYBOARD (botones en la barra inferior)
     keyboard = [
         [KeyboardButton("A"), KeyboardButton("B")],
         [KeyboardButton("C"), KeyboardButton("D")]
@@ -210,7 +193,6 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     )
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja respuestas de los botones A, B, C, D"""
     user_id = update.effective_user.id
     text = update.message.text.strip().upper()
     
@@ -232,7 +214,6 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     is_correct = (answer == correct)
     
-    from database import save_user_response, increment_case_stat, update_user_stats
     save_user_response(user_id, case_id, answer, 1 if is_correct else 0)
     increment_case_stat(case_id, answer)
     update_user_stats(user_id, 1 if is_correct else 0)
@@ -240,7 +221,6 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_correct:
         session["correct_count"] += 1
     
-    from database import get_case_stats
     stats = get_case_stats(case_id)
     total = sum(stats.values())
     
@@ -253,7 +233,6 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     result_text = "🎉 ¡CORRECTO!" if is_correct else f"❌ Incorrecto. La respuesta era: {correct}"
     
-    # Botón para ver justificación (inline)
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(f"Ver justificación 📚", callback_data=f"just_{case_id}")
