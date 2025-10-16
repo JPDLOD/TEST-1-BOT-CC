@@ -47,11 +47,9 @@ CREATE TABLE IF NOT EXISTS clinical_cases (
   topic TEXT,
   subtopic TEXT,
   correct_answer TEXT,
-  created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-  last_verified BIGINT DEFAULT 0
+  created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
 );
 CREATE INDEX IF NOT EXISTS idx_cases_specialty ON clinical_cases(specialty);
-CREATE INDEX IF NOT EXISTS idx_cases_verified ON clinical_cases(last_verified);
 
 CREATE TABLE IF NOT EXISTS justifications (
   id SERIAL PRIMARY KEY,
@@ -115,11 +113,9 @@ CREATE TABLE IF NOT EXISTS clinical_cases (
   topic TEXT,
   subtopic TEXT,
   correct_answer TEXT,
-  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-  last_verified INTEGER DEFAULT 0
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_cases_specialty ON clinical_cases(specialty);
-CREATE INDEX IF NOT EXISTS idx_cases_verified ON clinical_cases(last_verified);
 
 CREATE TABLE IF NOT EXISTS justifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
