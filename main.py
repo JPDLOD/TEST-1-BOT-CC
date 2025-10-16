@@ -488,6 +488,94 @@ async def handle_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     detect_voted_polls_on_save(msg.message_id, raw_json)
     logger.info(f"Guardado en borrador: {msg.message_id}")
 
+async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para mensajes privados (fuera del canal)."""
+    if not update.message:
+        return
+    
+    # Ignorar si es del canal
+    if update.message.chat.type in ['channel', 'supergroup', 'group']:
+        return
+    
+    txt = update.message.text or ""
+    
+    # Comando /start en privado
+    if txt.strip().lower().startswith("/start"):
+        # Verificar si es un deep link de justificación
+        if "just_" in txt:
+            # Delegar a justifications_handler
+            return
+        
+        # Menú principal con botones estilo Combot
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📚 Casos Aleatorios", callback_data="menu_casos")],
+            [InlineKeyboardButton("ℹ️ Acerca de", callback_data="menu_about")],
+            [InlineKeyboardButton("📋 Comandos", callback_data="menu_commands")]
+        ])
+        
+        welcome_text = (
+            "¡Bienvenido al Bot de Casos Clínicos! 🏥\n\n"
+            "Practica con casos clínicos aleatorios del banco de preguntas.\n\n"
+            "Selecciona una opción:"
+        )
+        
+        await update.message.reply_text(
+            welcome_text,
+            reply_markup=keyboard
+        )
+        return
+    
+    # Otros comandos privados
+    if txt.strip().startswith("/"):
+        # Ya manejados por otros handlers
+        return
+
+async def handle_menu_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para los botones del menú principal."""
+    query = update.callback_query
+    if not query or not query.data.startswith("menu_"):
+        return
+    
+    await query.answer()
+    
+    if query.data == "menu_casos":
+        await query.edit_message_text(
+            "📚 **Casos Aleatorios**\n\n"
+            "Usa el comando:\n"
+            "`/casos [cantidad]`\n\n"
+            "Ejemplos:\n"
+            "• `/casos` - 5 casos (default)\n"
+            "• `/casos 10` - 10 casos aleatorios\n"
+            "• `/casos 20` - 20 casos (máximo)\n\n"
+            "El bot te enviará casos con botones A, B, C, D.\n"
+            "Responde cada uno y recibirás la justificación.",
+            parse_mode="Markdown"
+        )
+    
+    elif query.data == "menu_about":
+        await query.edit_message_text(
+            "ℹ️ **Acerca del Bot**\n\n"
+            "Bot de Casos Clínicos para preparación de exámenes médicos.\n\n"
+            "• Casos aleatorios con opciones múltiples\n"
+            "• Justificaciones automáticas\n"
+            "• Estadísticas de respuestas\n"
+            "• Sistema de tracking por usuario\n\n"
+            "Desarrollado para estudiantes de medicina."
+        )
+    
+    elif query.data == "menu_commands":
+        await query.edit_message_text(
+            "📋 **Comandos Disponibles**\n\n"
+            "**Usuario:**\n"
+            "• `/start` - Menú principal\n"
+            "• `/casos [N]` - N casos aleatorios (1-20)\n"
+            "• `/qbank [N]` - Alias de /casos\n\n"
+            "**Administrador:**\n"
+            "• Ver panel de admin en el canal BORRADOR",
+            parse_mode="Markdown"
+        )
+
+
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.exception("Excepción no capturada", exc_info=context.error)
 
@@ -518,6 +606,9 @@ def main():
     app.add_handler(PollHandler(handle_poll_update))
     app.add_handler(PollAnswerHandler(handle_poll_answer_update))
     
+    # Command handler para /start en privado
+    app.add_handler(CommandHandler("start", handle_private_message, filters=filters.ChatType.PRIVATE))
+    
     try:
         from justifications_handler import add_justification_handlers
         add_justification_handlers(app)
@@ -525,7 +616,25 @@ def main():
     except ImportError:
         logger.warning("⚠️ Módulo de justificaciones no encontrado")
     
+    try:
+        from qbank_handler import add_qbank_handlers
+        add_qbank_handlers(app)
+        logger.info("✅ Sistema QBank activado")
+    except ImportError:
+        logger.warning("⚠️ Módulo QBank no encontrado")
+    
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_channel))
+    
+    # Handler para mensajes privados
+    app.add_handler(MessageHandler(
+        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
+        handle_private_message
+    ))
+    
+    # Handler para botones del menú
+    app.add_handler(CallbackQueryHandler(handle_menu_callbacks, pattern=r"^menu_"))
+    
+    # Handler general de callbacks (debe ir después de los específicos)
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(on_error)
 
