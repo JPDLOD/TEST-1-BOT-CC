@@ -17,9 +17,9 @@ from database import (
 logger = logging.getLogger(__name__)
 
 # Patrones actualizados
-CASE_PATTERN = re.compile(r'###CASE_([A-Z0-9_-]+)', re.IGNORECASE)
+CASE_PATTERN = re.compile(r'###CASE[_\s]*([A-Z0-9_-]+)', re.IGNORECASE)
 CORRECT_PATTERN = re.compile(r'#([A-D])#', re.IGNORECASE)
-ID_CLEANUP_PATTERN = re.compile(r'###CASE_[A-Z0-9_-]+|#[A-D]#', re.IGNORECASE)
+ID_CLEANUP_PATTERN = re.compile(r'###CASE[_\s]*[A-Z0-9_-]+|#[A-D]#', re.IGNORECASE)
 
 user_sessions = {}
 
@@ -46,10 +46,17 @@ async def cmd_random_cases(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not all_cases:
         total = count_cases()
         await update.message.reply_text(
-            f"❌ No hay casos disponibles en la base de datos.\n\n"
+            f"❌ No hay casos disponibles\n\n"
             f"📊 Casos en BD: {total}\n\n"
-            f"💡 Asegúrate de que los casos estén publicados en el canal con formato:\n"
-            f"`###CASE_0000_ESPECIALIDAD_TEMA_0001 #C#`",
+            f"💡 **Formatos aceptados:**\n"
+            f"`###CASE_0001 #A#`\n"
+            f"`###CASE_0001_PED_DENGUE #C#`\n"
+            f"`###CASE CASO_GYO_0008 #B#`\n\n"
+            f"📌 **Recuerda:**\n"
+            f"• Usa `#LETRA#` para la respuesta\n"
+            f"• Las letras son: A, B, C o D\n"
+            f"• El bot detecta casos automáticamente",
+            parse_mode="Markdown",
             reply_markup=ReplyKeyboardRemove()
         )
         return
@@ -252,3 +259,45 @@ async def finish_session(update: Update, context: ContextTypes.DEFAULT_TYPE, use
     )
     
     del user_sessions[user_id]
+```
+
+---
+
+## 4️⃣ **runtime.txt**
+```
+python-3.11
+```
+
+---
+
+## 5️⃣ **requirements.txt**
+```
+python-telegram-bot[job-queue]==21.6
+psycopg2-binary==2.9.10
+```
+
+---
+
+## 🎯 INSTRUCCIONES
+
+1. **Copia estos 5 archivos** exactamente como están
+2. **Sube a GitHub**
+3. **Deploy en Render**
+4. **Configura las variables de entorno en Render:**
+```
+BOT_TOKEN=8364968927:AAFSDwTr9TZfkbQfpe2EWMVZEkYnTXjNCKw
+DATABASE_URL=(automático)
+JUSTIFICATIONS_CHAT_ID=-1003058530208
+FREE_CHANNEL_ID=-1002717125281
+SUBS_CHANNEL_ID=-1003042227035
+ADMIN_USER_IDS=TU_USER_ID
+DAILY_CASE_LIMIT=5
+TIMEZONE=America/Bogota
+PAUSE=0.3
+```
+
+5. **Envia un caso con este formato:**
+```
+###CASE_0001 #C#
+
+Pregunta del caso aquí...
