@@ -7,7 +7,7 @@ from config import BOT_TOKEN, JUSTIFICATIONS_CHAT_ID
 from database import init_db, count_cases
 from cases_handler import cmd_random_cases, handle_answer
 from justifications_handler import handle_justification_request, handle_next_case
-from channel_scanner import process_message_for_catalog, cmd_refresh_catalog
+from channel_scanner import process_message_for_catalog, cmd_refresh_catalog, cmd_replace_caso
 from admin_panel import cmd_admin, cmd_set_limit, cmd_set_sub, handle_admin_callback, is_admin
 from channels_handler import handle_send_announcement, process_announcement
 
@@ -45,50 +45,41 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 **Comandos disponibles:**\n\n"
         "📚 **Para usuarios:**\n"
-        "• /start - Iniciar bot y ver bienvenida\n"
-        "• /random_cases - Obtener 5 casos clínicos aleatorios\n"
+        "• /start - Iniciar bot\n"
+        "• /random_cases - 5 casos aleatorios\n"
         "• /help - Ver esta ayuda\n\n"
         "🎯 **Cómo usar:**\n"
         "1. Escribe /random_cases\n"
         "2. Lee el caso clínico\n"
-        "3. Presiona el botón con tu respuesta (A, B, C o D)\n"
-        "4. Ve las estadísticas de otros usuarios\n"
-        "5. Presiona 'Ver justificación' para aprender\n"
+        "3. Presiona tu respuesta (A, B, C o D)\n"
+        "4. Ve estadísticas\n"
+        "5. Presiona 'Ver justificación'\n"
         "6. Continúa con el siguiente caso\n\n"
-        "⏰ **Límite diario:** 5 casos por día\n"
-        "🔄 **Reset:** Todos los días a las 12:00 AM\n\n"
-        "💡 **Formato de casos:**\n"
-        "`###CASE_0000_ESPECIALIDAD_TEMA_0001 #C#`\n"
-        "• 0000 = ID general\n"
-        "• ESPECIALIDAD = Pediatría, Medicina, etc.\n"
-        "• TEMA = Dengue, Neumonía, etc.\n"
-        "• 0001 = # del tema\n"
-        "• #C# = Respuesta correcta",
+        "⏰ **Límite:** 5 casos/día\n"
+        "🔄 **Reset:** 12:00 AM diario",
         parse_mode="Markdown"
     )
 
 async def handle_justifications_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Detecta casos y justificaciones del canal automáticamente"""
+    """Detecta casos y justificaciones del canal"""
     msg = update.channel_post
     if not msg or msg.chat_id != JUSTIFICATIONS_CHAT_ID:
         return
     
     text = msg.text or msg.caption or ""
-    
-    # Procesar para guardar en catálogo
     await process_message_for_catalog(msg.message_id, text)
 
 async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
     
-    # Handler para respuestas A, B, C, D
+    # Respuestas A, B, C, D
     text = update.message.text.strip().upper()
     if text in ["A", "B", "C", "D"]:
         await handle_answer(update, context)
         return
     
-    # Handler para mensajes de admin
+    # Anuncios de admin
     if "pending_announcement" in context.user_data:
         if is_admin(update.effective_user.id):
             await process_announcement(update, context)
@@ -123,12 +114,11 @@ def main():
     app.add_handler(CommandHandler("set_limit", cmd_set_limit))
     app.add_handler(CommandHandler("set_sub", cmd_set_sub))
     app.add_handler(CommandHandler("refresh_catalog", cmd_refresh_catalog))
+    app.add_handler(CommandHandler("replace_caso", cmd_replace_caso))
     
-    # Handlers de canal y mensajes
+    # Handlers
     app.add_handler(MessageHandler(filters.ChatType.CHANNEL, handle_justifications_channel))
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, handle_private_message))
-    
-    # Callbacks
     app.add_handler(CallbackQueryHandler(handle_callback))
     
     # Errores
