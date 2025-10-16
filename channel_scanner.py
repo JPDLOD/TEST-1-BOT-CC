@@ -13,9 +13,9 @@ from database import save_case, save_justification, count_cases
 
 logger = logging.getLogger(__name__)
 
-CASE_PATTERN = re.compile(r'###CASE_([A-Z0-9_-]+)', re.IGNORECASE)
+CASE_PATTERN = re.compile(r'###CASE[_\s]*([A-Z0-9_-]+)', re.IGNORECASE)
 CORRECT_PATTERN = re.compile(r'#([A-D])#', re.IGNORECASE)
-JUST_PATTERN = re.compile(r'###JUST_([A-Z0-9_-]+)', re.IGNORECASE)
+JUST_PATTERN = re.compile(r'###JUST[_\s]*([A-Z0-9_-]+)', re.IGNORECASE)
 
 async def scan_channel_for_cases(context: ContextTypes.DEFAULT_TYPE, limit: int = 2000):
     """
@@ -28,22 +28,12 @@ async def scan_channel_for_cases(context: ContextTypes.DEFAULT_TYPE, limit: int 
         cases_found = 0
         justs_found = 0
         
-        # Obtener últimos mensajes del canal
-        # Telegram no permite get_history directamente, así que usamos un truco:
-        # Intentar obtener info del chat y mensaje más reciente
-        
         try:
             chat = await context.bot.get_chat(JUSTIFICATIONS_CHAT_ID)
             logger.info(f"📡 Canal encontrado: {chat.title}")
         except Exception as e:
             logger.error(f"❌ No se pudo acceder al canal: {e}")
             return
-        
-        # Estrategia: Hacer forward/copy de mensajes en un rango
-        # Esto es complicado porque Telegram no da get_history directo
-        
-        # ALTERNATIVA MEJOR: Pedir al usuario que use /refresh_catalog manualmente
-        # cuando agregue casos nuevos al canal
         
         logger.warning("⚠️ Scanner automático limitado por API de Telegram")
         logger.info("💡 Usa /refresh_catalog después de agregar casos al canal")
@@ -61,19 +51,30 @@ async def cmd_refresh_catalog(update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     
-    msg = await update.message.reply_text("🔄 Refrescando catálogo...")
-    
-    # Esto requeriría iterar mensajes, pero Telegram no lo permite fácilmente
-    # SOLUCIÓN: El bot guarda casos AUTOMÁTICAMENTE cuando detecta mensajes nuevos
-    # en handle_justifications_channel
+    msg = await update.message.reply_text("🔄 Verificando catálogo...")
     
     total = count_cases()
     
-    await msg.edit_text(
-        f"✅ Catálogo listo\n\n"
-        f"📊 Total de casos: {total}\n\n"
-        f"💡 El bot detecta casos automáticamente cuando se publican en el canal."
-    )
+    from database import get_all_case_ids
+    all_ids = get_all_case_ids()
+    
+    response = f"✅ Catálogo actualizado\n\n📊 **Estado:**\n"
+    response += f"• Total de casos: {total}\n\n"
+    
+    if all_ids:
+        response += "📋 **Últimos 10 casos:**\n"
+        for case_id in all_ids[-10:]:
+            response += f"• `{case_id}`\n"
+    else:
+        response += "⚠️ **No hay casos en la BD**\n\n"
+        response += "💡 **Formato esperado:**\n"
+        response += "`###CASE_ID #RESPUESTA#`\n\n"
+        response += "**Ejemplos válidos:**\n"
+        response += "• `###CASE_0001 #A#`\n"
+        response += "• `###CASE_0001_PED_DENGUE_0001 #C#`\n"
+        response += "• `###CASE CASO_GYO_0008 #B#`\n"
+    
+    await msg.edit_text(response, parse_mode="Markdown")
 
 async def process_message_for_catalog(message_id: int, text: str):
     """
@@ -93,7 +94,7 @@ async def process_message_for_catalog(message_id: int, text: str):
         correct_answer = correct_match.group(1).upper() if correct_match else "A"
         
         save_case(case_id, message_id, correct_answer)
-        logger.info(f"✅ Caso detectado: {case_id} → {correct_answer}")
+        logger.info(f"✅ Caso detectado: {case_id} → Respuesta: {correct_answer}")
     
     # Detectar JUSTIFICACIÓN
     just_match = JUST_PATTERN.search(text)
