@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import logging
-import random
 import re
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -54,37 +53,47 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     
     for just_id in justification_ids:
         try:
-            original = await context.bot.forward_message(
+            # Forward temporal para obtener contenido
+            msg = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
                 message_id=just_id
             )
             
-            text = original.text or original.caption or ""
+            text = msg.text or msg.caption or ""
             clean_text = JUST_CLEANUP_PATTERN.sub('', text).strip()
             
-            if original.text:
+            # Extraer file_ids ANTES de borrar
+            photo_id = msg.photo[-1].file_id if msg.photo else None
+            doc_id = msg.document.file_id if msg.document else None
+            
+            # BORRAR forward inmediatamente
+            try:
+                await context.bot.delete_message(user_id, msg.message_id)
+            except:
+                pass
+            
+            # Enviar versión limpia directamente
+            if photo_id:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=photo_id,
+                    caption=clean_text if clean_text else None,
+                    protect_content=True
+                )
+            elif doc_id:
+                await context.bot.send_document(
+                    chat_id=user_id,
+                    document=doc_id,
+                    caption=clean_text if clean_text else None,
+                    protect_content=True
+                )
+            elif clean_text:
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=clean_text,
                     protect_content=True
                 )
-            elif original.caption:
-                await context.bot.send_photo(
-                    chat_id=user_id,
-                    photo=original.photo[-1].file_id,
-                    caption=clean_text,
-                    protect_content=True
-                )
-            elif original.document:
-                await context.bot.send_document(
-                    chat_id=user_id,
-                    document=original.document.file_id,
-                    caption=clean_text if clean_text else None,
-                    protect_content=True
-                )
-            
-            await context.bot.delete_message(user_id, original.message_id)
             
             await asyncio.sleep(0.3)
         except TelegramError as e:
