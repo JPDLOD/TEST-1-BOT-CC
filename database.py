@@ -2,7 +2,7 @@
 import logging
 from typing import List, Tuple, Optional, Set, Dict
 from datetime import datetime
-from config import TZ, DATABASE_URL, DB_FILE
+from config import TZ, DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def _get_conn():
         key = "sqlite"
         if key in _conn_cache:
             return _conn_cache[key]
-        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        conn = sqlite3.connect("casos.db", check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         _conn_cache[key] = conn
@@ -50,9 +50,11 @@ CREATE TABLE IF NOT EXISTS clinical_cases (
   topic TEXT,
   subtopic TEXT,
   correct_answer TEXT,
-  created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
+  created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
+  last_verified BIGINT DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_cases_specialty ON clinical_cases(specialty);
+CREATE INDEX IF NOT EXISTS idx_cases_verified ON clinical_cases(last_verified);
 
 CREATE TABLE IF NOT EXISTS justifications (
   id SERIAL PRIMARY KEY,
@@ -116,9 +118,11 @@ CREATE TABLE IF NOT EXISTS clinical_cases (
   topic TEXT,
   subtopic TEXT,
   correct_answer TEXT,
-  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  last_verified INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_cases_specialty ON clinical_cases(specialty);
+CREATE INDEX IF NOT EXISTS idx_cases_verified ON clinical_cases(last_verified);
 
 CREATE TABLE IF NOT EXISTS justifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,13 +196,6 @@ def parse_case_id(case_id: str) -> Dict[str, str]:
     """
     Parsea un case_id con subcategorías
     Ejemplo: ###CASE_0000_PED_DENGUE_0001
-    Retorna: {
-        'full_id': '###CASE_0000_PED_DENGUE_0001',
-        'general_id': '0000',
-        'specialty': 'PED',
-        'topic': 'DENGUE',
-        'subtopic': '0001'
-    }
     """
     parts = case_id.replace("###CASE_", "").split("_")
     
@@ -236,7 +233,20 @@ def save_case(case_id: str, message_id: int, correct_answer: str = ""):
         )
         conn.commit()
     
-    logger.info(f"💾 Caso guardado: {case_id} → Esp:{parsed['specialty']} Topic:{parsed['topic']}")
+    logger.info(f"💾 Caso guardado: {case_id} → msg_id:{message_id}")
+
+def delete_case(case_id: str):
+    """Elimina un caso de la base de datos"""
+    conn = _get_conn()
+    
+    if USE_POSTGRES:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM clinical_cases WHERE case_id=%s", (case_id,))
+            logger.info(f"🗑️ Caso eliminado de DB: {case_id}")
+    else:
+        conn.execute("DELETE FROM clinical_cases WHERE case_id=?", (case_id,))
+        conn.commit()
+        logger.info(f"🗑️ Caso eliminado de DB: {case_id}")
 
 def save_justification(case_id: str, message_id: int):
     conn = _get_conn()
@@ -473,7 +483,6 @@ def get_subscribers() -> List[int]:
         return [row[0] for row in cur.fetchall()]
 
 def count_cases() -> int:
-    """Cuenta cuántos casos hay en la BD"""
     conn = _get_conn()
     if USE_POSTGRES:
         with conn.cursor() as cur:
