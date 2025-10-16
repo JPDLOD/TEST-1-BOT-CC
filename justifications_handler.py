@@ -12,7 +12,8 @@ from database import get_justifications_for_case, increment_daily_progress
 
 logger = logging.getLogger(__name__)
 
-JUST_PATTERN = re.compile(r'###JUST_(\d{3,})', re.IGNORECASE)
+JUST_PATTERN = re.compile(r'###JUST[_\s]*(\d{3,})', re.IGNORECASE)
+JUST_CLEANUP_PATTERN = re.compile(r'###JUST[_\s]*\d{3,}', re.IGNORECASE)
 
 async def detect_justification_from_message(message_id: int, text: str):
     just_match = JUST_PATTERN.search(text)
@@ -53,32 +54,41 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     
     for just_id in justification_ids:
         try:
-            copied = await context.bot.copy_message(
+            original = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
-                message_id=just_id,
-                protect_content=True
+                message_id=just_id
             )
             
-            text = copied.text or copied.caption or ""
-            clean_text = JUST_PATTERN.sub('', text).strip()
+            text = original.text or original.caption or ""
+            clean_text = JUST_CLEANUP_PATTERN.sub('', text).strip()
             
-            if clean_text != text and copied.text:
-                await context.bot.edit_message_text(
+            if original.text:
+                await context.bot.send_message(
                     chat_id=user_id,
-                    message_id=copied.message_id,
-                    text=clean_text
+                    text=clean_text,
+                    protect_content=True
                 )
-            elif clean_text != text and copied.caption:
-                await context.bot.edit_message_caption(
+            elif original.caption:
+                await context.bot.send_photo(
                     chat_id=user_id,
-                    message_id=copied.message_id,
-                    caption=clean_text
+                    photo=original.photo[-1].file_id,
+                    caption=clean_text,
+                    protect_content=True
                 )
+            elif original.document:
+                await context.bot.send_document(
+                    chat_id=user_id,
+                    document=original.document.file_id,
+                    caption=clean_text if clean_text else None,
+                    protect_content=True
+                )
+            
+            await context.bot.delete_message(user_id, original.message_id)
             
             await asyncio.sleep(0.3)
         except TelegramError as e:
-            logger.error(f"Error copiando justificación {just_id}: {e}")
+            logger.error(f"Error enviando justificación {just_id}: {e}")
     
     from cases_handler import user_sessions
     session = user_sessions.get(user_id)
