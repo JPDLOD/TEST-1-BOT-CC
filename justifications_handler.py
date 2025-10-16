@@ -6,7 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
-from config import DB_FILE, JUSTIFICATIONS_CHAT_ID
+from config import JUSTIFICATIONS_CHAT_ID
 from database import get_justifications_for_case, increment_daily_progress
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ async def detect_justification_from_message(message_id: int, text: str):
     case_id = f"#{just_match.group(1)}"
     
     from database import save_justification
-    save_justification(DB_FILE, case_id, message_id)
+    save_justification(case_id, message_id)
     
     logger.info(f"Justificación detectada: {case_id} → {message_id}")
 
@@ -37,7 +37,7 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     case_id = data.replace("just_", "")
     user_id = query.from_user.id
     
-    justification_ids = get_justifications_for_case(DB_FILE, case_id)
+    justification_ids = get_justifications_for_case(case_id)
     
     if not justification_ids:
         await query.edit_message_text("❌ Justificación no disponible")
@@ -53,7 +53,6 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     
     for just_id in justification_ids:
         try:
-            # Forward temporal para obtener contenido
             msg = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
@@ -63,17 +62,14 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
             text = msg.text or msg.caption or ""
             clean_text = JUST_CLEANUP_PATTERN.sub('', text).strip()
             
-            # Extraer file_ids ANTES de borrar
             photo_id = msg.photo[-1].file_id if msg.photo else None
             doc_id = msg.document.file_id if msg.document else None
             
-            # BORRAR forward inmediatamente
             try:
                 await context.bot.delete_message(user_id, msg.message_id)
             except:
                 pass
             
-            # Enviar versión limpia directamente
             if photo_id:
                 await context.bot.send_photo(
                     chat_id=user_id,
@@ -104,7 +100,7 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     
     if session:
         session["current_index"] += 1
-        increment_daily_progress(DB_FILE, user_id)
+        increment_daily_progress(user_id)
         
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("Siguiente caso ➡️", callback_data="next_case")
