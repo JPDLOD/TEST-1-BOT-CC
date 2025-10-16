@@ -102,38 +102,49 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     session["correct_answer"] = correct_answer
     
     try:
-        original = await context.bot.forward_message(
+        # Hacer forward temporal para extraer info
+        msg = await context.bot.forward_message(
             chat_id=user_id,
             from_chat_id=JUSTIFICATIONS_CHAT_ID,
             message_id=message_id
         )
         
-        text = original.text or original.caption or ""
-        
+        text = msg.text or msg.caption or ""
         clean_text = ID_CLEANUP_PATTERN.sub('', text).strip()
         
-        if original.text:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=clean_text
-            )
-        elif original.caption:
+        # Extraer file_id ANTES de borrar
+        photo_id = msg.photo[-1].file_id if msg.photo else None
+        doc_id = msg.document.file_id if msg.document else None
+        
+        # BORRAR INMEDIATAMENTE el forward
+        try:
+            await context.bot.delete_message(user_id, msg.message_id)
+        except:
+            pass
+        
+        # AHORA enviar versión limpia directamente
+        if photo_id:
             await context.bot.send_photo(
                 chat_id=user_id,
-                photo=original.photo[-1].file_id,
-                caption=clean_text
+                photo=photo_id,
+                caption=clean_text if clean_text else None
             )
-        elif original.document:
+        elif doc_id:
             await context.bot.send_document(
                 chat_id=user_id,
-                document=original.document.file_id,
-                caption=clean_text
+                document=doc_id,
+                caption=clean_text if clean_text else None
             )
+        elif clean_text:
+            await context.bot.send_message(chat_id=user_id, text=clean_text)
         
-        await context.bot.delete_message(user_id, original.message_id)
+        # Guardar que enviamos este caso
+        from database import save_user_sent_case
+        save_user_sent_case(DB_FILE, user_id, case_id)
         
     except TelegramError as e:
         logger.error(f"Error enviando caso: {e}")
+        return
     
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("A", callback_data=f"ans_A"),
