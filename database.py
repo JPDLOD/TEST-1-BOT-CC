@@ -58,6 +58,14 @@ CREATE TABLE IF NOT EXISTS user_responses (
 CREATE INDEX IF NOT EXISTS idx_resp_user ON user_responses(user_id);
 CREATE INDEX IF NOT EXISTS idx_resp_case ON user_responses(case_id);
 
+CREATE TABLE IF NOT EXISTS user_sent_cases (
+  user_id INTEGER NOT NULL,
+  case_id TEXT NOT NULL,
+  sent_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  PRIMARY KEY (user_id, case_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sent_user ON user_sent_cases(user_id);
+
 CREATE TABLE IF NOT EXISTS case_stats (
   case_id TEXT,
   answer TEXT,
@@ -107,9 +115,19 @@ def get_justifications_for_case(path: str, case_id: str) -> List[int]:
     return [row[0] for row in cur.fetchall()]
 
 def get_user_sent_cases(path: str, user_id: int) -> Set[str]:
+    """Obtiene los casos que ya fueron enviados a un usuario (para no repetir)"""
     c = _conn(path)
-    cur = c.execute("SELECT DISTINCT case_id FROM user_responses WHERE user_id=?", (user_id,))
+    cur = c.execute("SELECT case_id FROM user_sent_cases WHERE user_id=?", (user_id,))
     return {row[0] for row in cur.fetchall()}
+
+def save_user_sent_case(path: str, user_id: int, case_id: str):
+    """Guarda que un caso fue enviado a un usuario"""
+    c = _conn(path)
+    c.execute(
+        "INSERT OR IGNORE INTO user_sent_cases(user_id, case_id) VALUES (?,?)",
+        (user_id, case_id)
+    )
+    c.commit()
 
 def save_user_response(path: str, user_id: int, case_id: str, answer: str, is_correct: int):
     c = _conn(path)
