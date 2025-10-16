@@ -3,59 +3,58 @@ import logging
 import random
 import re
 from typing import Optional, Tuple, List
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
-from config import DB_FILE, JUSTIFICATIONS_CHAT_ID
+from config import JUSTIFICATIONS_CHAT_ID
 from database import (
     get_all_case_ids, get_user_sent_cases, get_case_by_id,
-    get_daily_progress, increment_daily_progress, get_or_create_user
+    get_daily_progress, increment_daily_progress, get_or_create_user,
+    save_user_sent_case, count_cases
 )
 
 logger = logging.getLogger(__name__)
 
-CASE_PATTERN = re.compile(r'(?:CASO[_\s]*(?:\w+[_\s]*)?)?#(\d{3,})', re.IGNORECASE)
+# Patrones actualizados
+CASE_PATTERN = re.compile(r'###CASE_([A-Z0-9_-]+)', re.IGNORECASE)
 CORRECT_PATTERN = re.compile(r'#([A-D])#', re.IGNORECASE)
-ID_CLEANUP_PATTERN = re.compile(r'(?:CASO[_\s]*\w+[_\s]*)?#\d{3,}|#[A-D]#', re.IGNORECASE)
+ID_CLEANUP_PATTERN = re.compile(r'###CASE_[A-Z0-9_-]+|#[A-D]#', re.IGNORECASE)
 
 user_sessions = {}
-
-async def detect_case_from_message(message_id: int, text: str):
-    case_match = CASE_PATTERN.search(text)
-    if not case_match:
-        return
-    
-    case_id = f"#{case_match.group(1)}"
-    
-    correct_match = CORRECT_PATTERN.search(text)
-    correct_answer = correct_match.group(1).upper() if correct_match else "A"
-    
-    from database import save_case
-    save_case(DB_FILE, case_id, message_id, correct_answer=correct_answer)
-    
-    logger.info(f"Caso detectado: {case_id} → {message_id}, respuesta: {correct_answer}")
 
 async def cmd_random_cases(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or ""
     first_name = update.effective_user.first_name or ""
     
-    user = get_or_create_user(DB_FILE, user_id, username, first_name)
+    user = get_or_create_user(user_id, username, first_name)
     
-    today_solved = get_daily_progress(DB_FILE, user_id)
+    today_solved = get_daily_progress(user_id)
     limit = user["daily_limit"]
     
     if today_solved >= limit:
         await update.message.reply_text(
             f"🔥 Ya completaste tus {limit} casos de hoy.\n"
-            f"Vuelve mañana a las 12:00 AM para más."
+            f"Vuelve mañana a las 12:00 AM para más.",
+            reply_markup=ReplyKeyboardRemove()
         )
         return
     
-    all_cases = set(get_all_case_ids(DB_FILE))
-    sent_cases = get_user_sent_cases(DB_FILE, user_id)
+    all_cases = set(get_all_case_ids())
     
+    if not all_cases:
+        total = count_cases()
+        await update.message.reply_text(
+            f"❌ No hay casos disponibles en la base de datos.\n\n"
+            f"📊 Casos en BD: {total}\n\n"
+            f"💡 Asegúrate de que los casos estén publicados en el canal con formato:\n"
+            f"`###CASE_0000_ESPECIALIDAD_TEMA_0001 #C#`",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+    
+    sent_cases = get_user_sent_cases(user_id)
     available = all_cases - sent_cases
     
     if not available:
@@ -63,7 +62,10 @@ async def cmd_random_cases(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🎉 ¡Completaste todos los casos! Reiniciando...")
     
     if not available:
-        await update.message.reply_text("❌ No hay casos disponibles.")
+        await update.message.reply_text(
+            "❌ No hay casos disponibles.",
+            reply_markup=ReplyKeyboardRemove()
+        )
         return
     
     cases_to_send = min(5, limit - today_solved)
@@ -90,10 +92,14 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
         return
     
     case_id = cases[idx]
-    case_data = get_case_by_id(DB_FILE, case_id)
+    case_data = get_case_by_id(case_id)
     
     if not case_data:
-        await context.bot.send_message(user_id, "❌ Caso no encontrado")
+        await context.bot.send_message(
+            user_id, 
+            "❌ Caso no encontrado",
+            reply_markup=ReplyKeyboardRemove()
+        )
         return
     
     _, message_id, correct_answer = case_data
@@ -102,7 +108,7 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     session["correct_answer"] = correct_answer
     
     try:
-        # Hacer forward temporal para extraer info
+        # Forward temporal para extraer info
         msg = await context.bot.forward_message(
             chat_id=user_id,
             from_chat_id=JUSTIFICATIONS_CHAT_ID,
@@ -112,17 +118,17 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
         text = msg.text or msg.caption or ""
         clean_text = ID_CLEANUP_PATTERN.sub('', text).strip()
         
-        # Extraer file_id ANTES de borrar
+        # Extraer file_ids ANTES de borrar
         photo_id = msg.photo[-1].file_id if msg.photo else None
         doc_id = msg.document.file_id if msg.document else None
         
-        # BORRAR INMEDIATAMENTE el forward
+        # BORRAR forward inmediatamente
         try:
             await context.bot.delete_message(user_id, msg.message_id)
         except:
             pass
         
-        # AHORA enviar versión limpia directamente
+        # Enviar versión limpia
         if photo_id:
             await context.bot.send_photo(
                 chat_id=user_id,
@@ -139,53 +145,63 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
             await context.bot.send_message(chat_id=user_id, text=clean_text)
         
         # Guardar que enviamos este caso
-        from database import save_user_sent_case
-        save_user_sent_case(DB_FILE, user_id, case_id)
+        save_user_sent_case(user_id, case_id)
         
     except TelegramError as e:
         logger.error(f"Error enviando caso: {e}")
         return
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("A", callback_data=f"ans_A"),
-         InlineKeyboardButton("B", callback_data=f"ans_B")],
-        [InlineKeyboardButton("C", callback_data=f"ans_C"),
-         InlineKeyboardButton("D", callback_data=f"ans_D")]
-    ])
+    # REPLY KEYBOARD (botones en la barra inferior)
+    keyboard = [
+        [KeyboardButton("A"), KeyboardButton("B")],
+        [KeyboardButton("C"), KeyboardButton("D")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(
+        keyboard, 
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Selecciona tu respuesta..."
+    )
     
     await context.bot.send_message(
         chat_id=user_id,
         text=f"📋 Caso {idx + 1}/{len(cases)}\n\n¿Cuál es tu respuesta?",
-        reply_markup=keyboard
+        reply_markup=reply_markup
     )
 
 async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    """Maneja respuestas de los botones A, B, C, D"""
+    user_id = update.effective_user.id
+    text = update.message.text.strip().upper()
     
-    user_id = query.from_user.id
+    if text not in ["A", "B", "C", "D"]:
+        return
+    
     session = user_sessions.get(user_id)
     
     if not session or "current_case" not in session:
-        await query.edit_message_text("❌ Sesión expirada. Usa /random_cases")
+        await update.message.reply_text(
+            "❌ Sesión expirada. Usa /random_cases",
+            reply_markup=ReplyKeyboardRemove()
+        )
         return
     
-    answer = query.data.split("_")[1]
+    answer = text
     case_id = session["current_case"]
     correct = session["correct_answer"]
     
     is_correct = (answer == correct)
     
     from database import save_user_response, increment_case_stat, update_user_stats
-    save_user_response(DB_FILE, user_id, case_id, answer, 1 if is_correct else 0)
-    increment_case_stat(DB_FILE, case_id, answer)
-    update_user_stats(DB_FILE, user_id, 1 if is_correct else 0)
+    save_user_response(user_id, case_id, answer, 1 if is_correct else 0)
+    increment_case_stat(case_id, answer)
+    update_user_stats(user_id, 1 if is_correct else 0)
     
     if is_correct:
         session["correct_count"] += 1
     
     from database import get_case_stats
-    stats = get_case_stats(DB_FILE, case_id)
+    stats = get_case_stats(case_id)
     total = sum(stats.values())
     
     stats_text = "\n📊 Estadísticas:\n"
@@ -197,11 +213,13 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     result_text = "🎉 ¡CORRECTO!" if is_correct else f"❌ Incorrecto. La respuesta era: {correct}"
     
+    # Botón para ver justificación (inline)
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(f"Ver justificación 📚", callback_data=f"just_{case_id}")
     ]])
     
-    await query.edit_message_text(
+    await update.message.reply_text(
         f"{result_text}\n{stats_text}",
         reply_markup=keyboard
     )
@@ -229,7 +247,8 @@ async def finish_session(update: Update, context: ContextTypes.DEFAULT_TYPE, use
         f"🏁 Sesión completada!\n\n"
         f"✅ Respondiste correctamente: {correct}/{total}\n"
         f"📈 Progreso: {'█' * correct}{'░' * (total - correct)}\n\n"
-        f"🔥 Vuelve mañana para más casos!"
+        f"🔥 Vuelve mañana para más casos!",
+        reply_markup=ReplyKeyboardRemove()
     )
     
     del user_sessions[user_id]
