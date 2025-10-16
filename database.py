@@ -6,21 +6,19 @@ from config import TZ, DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
-# Decidir backend de BD
 USE_POSTGRES = bool(DATABASE_URL)
 
 if USE_POSTGRES:
     import psycopg2
     from psycopg2.extras import RealDictCursor
-    logger.info("🐘 Usando PostgreSQL (persistente)")
+    logger.info("🐘 Usando PostgreSQL")
 else:
     import sqlite3
-    logger.info("💾 Usando SQLite (local testing)")
+    logger.info("💾 Usando SQLite")
 
 _conn_cache = {}
 
 def _get_conn():
-    """Obtiene conexión según el backend configurado"""
     global _conn_cache
     
     if USE_POSTGRES:
@@ -41,7 +39,6 @@ def _get_conn():
         _conn_cache[key] = conn
         return conn
 
-# Schema SQL - Compatible con ambos
 _schema_postgres = """
 CREATE TABLE IF NOT EXISTS clinical_cases (
   case_id TEXT PRIMARY KEY,
@@ -179,7 +176,6 @@ CREATE TABLE IF NOT EXISTS daily_progress (
 """
 
 def init_db():
-    """Inicializa la base de datos"""
     conn = _get_conn()
     schema = _schema_postgres if USE_POSTGRES else _schema_sqlite
     
@@ -189,30 +185,20 @@ def init_db():
     else:
         conn.executescript(schema)
         conn.commit()
-    
-    logger.info("✅ Base de datos inicializada")
 
 def parse_case_id(case_id: str) -> Dict[str, str]:
-    """
-    Parsea un case_id con subcategorías
-    Ejemplo: ###CASE_0000_PED_DENGUE_0001
-    """
     parts = case_id.replace("###CASE_", "").split("_")
     
-    result = {
+    return {
         'full_id': case_id,
         'general_id': parts[0] if len(parts) > 0 else '',
         'specialty': parts[1] if len(parts) > 1 else '',
         'topic': parts[2] if len(parts) > 2 else '',
         'subtopic': parts[3] if len(parts) > 3 else ''
     }
-    
-    return result
 
 def save_case(case_id: str, message_id: int, correct_answer: str = ""):
-    """Guarda un caso con sus subcategorías parseadas"""
     parsed = parse_case_id(case_id)
-    
     conn = _get_conn()
     
     if USE_POSTGRES:
@@ -232,21 +218,15 @@ def save_case(case_id: str, message_id: int, correct_answer: str = ""):
             (case_id, message_id, parsed['specialty'], parsed['topic'], parsed['subtopic'], correct_answer)
         )
         conn.commit()
-    
-    logger.info(f"💾 Caso guardado: {case_id} → msg_id:{message_id}")
 
 def delete_case(case_id: str):
-    """Elimina un caso de la base de datos"""
     conn = _get_conn()
-    
     if USE_POSTGRES:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM clinical_cases WHERE case_id=%s", (case_id,))
-            logger.info(f"🗑️ Caso eliminado de DB: {case_id}")
     else:
         conn.execute("DELETE FROM clinical_cases WHERE case_id=?", (case_id,))
         conn.commit()
-        logger.info(f"🗑️ Caso eliminado de DB: {case_id}")
 
 def save_justification(case_id: str, message_id: int):
     conn = _get_conn()
