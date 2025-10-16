@@ -19,17 +19,36 @@ logger.info("✅ Base de datos inicializada")
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 ¡Bienvenido a Casos Clínicos Bot!\n\n"
-        "📚 Usa /random_cases para obtener 5 casos aleatorios\n"
-        "📊 Responde y aprende con estadísticas en tiempo real\n\n"
-        "¡Buena suerte! 🔥"
+        "🎯 **Comandos disponibles:**\n"
+        "• /random_cases - 5 casos clínicos aleatorios\n"
+        "• /help - Ver ayuda completa\n\n"
+        "📊 **Cómo funciona:**\n"
+        "1️⃣ Solicita casos con /random_cases\n"
+        "2️⃣ Lee el caso y selecciona tu respuesta (A, B, C o D)\n"
+        "3️⃣ Ve estadísticas en tiempo real\n"
+        "4️⃣ Consulta la justificación después de responder\n\n"
+        "¡Buena suerte! 🔥",
+        parse_mode="Markdown"
     )
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Comandos disponibles:\n\n"
-        "/random_cases - 5 casos aleatorios\n"
-        "/start - Iniciar bot\n"
-        "/help - Ver ayuda"
+        "🤖 **Comandos disponibles:**\n\n"
+        "📚 **Para usuarios:**\n"
+        "• /start - Iniciar bot y ver bienvenida\n"
+        "• /random_cases - Obtener 5 casos clínicos aleatorios\n"
+        "• /help - Ver esta ayuda\n\n"
+        "🎯 **Cómo usar:**\n"
+        "1. Escribe /random_cases\n"
+        "2. Lee el caso clínico\n"
+        "3. Presiona el botón con tu respuesta (A, B, C o D)\n"
+        "4. Ve las estadísticas de otros usuarios\n"
+        "5. Presiona 'Ver justificación' para aprender\n"
+        "6. Continúa con el siguiente caso\n\n"
+        "⏰ **Límite diario:** 5 casos por día\n"
+        "🔄 **Reset:** Todos los días a las 12:00 AM\n\n"
+        "💡 **Tip:** Los casos son 100% aleatorios y no se repiten hasta completar todos",
+        parse_mode="Markdown"
     )
 
 async def handle_justifications_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
