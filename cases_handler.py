@@ -15,8 +15,9 @@ from database import (
 
 logger = logging.getLogger(__name__)
 
-CASE_PATTERN = re.compile(r'#(\d{3,})', re.IGNORECASE)
+CASE_PATTERN = re.compile(r'(?:CASO[_\s]*(?:\w+[_\s]*)?)?#(\d{3,})', re.IGNORECASE)
 CORRECT_PATTERN = re.compile(r'#([A-D])#', re.IGNORECASE)
+ID_CLEANUP_PATTERN = re.compile(r'(?:CASO[_\s]*\w+[_\s]*)?#\d{3,}|#[A-D]#', re.IGNORECASE)
 
 user_sessions = {}
 
@@ -92,7 +93,7 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     case_data = get_case_by_id(DB_FILE, case_id)
     
     if not case_data:
-        await update.message.reply_text("❌ Caso no encontrado")
+        await context.bot.send_message(user_id, "❌ Caso no encontrado")
         return
     
     _, message_id, correct_answer = case_data
@@ -101,29 +102,38 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     session["correct_answer"] = correct_answer
     
     try:
-        copied = await context.bot.copy_message(
+        original = await context.bot.forward_message(
             chat_id=user_id,
             from_chat_id=JUSTIFICATIONS_CHAT_ID,
             message_id=message_id
         )
         
-        text = copied.text or copied.caption or ""
-        clean_text = CORRECT_PATTERN.sub('', text).strip()
+        text = original.text or original.caption or ""
         
-        if clean_text != text and copied.text:
-            await context.bot.edit_message_text(
+        clean_text = ID_CLEANUP_PATTERN.sub('', text).strip()
+        
+        if original.text:
+            await context.bot.send_message(
                 chat_id=user_id,
-                message_id=copied.message_id,
                 text=clean_text
             )
-        elif clean_text != text and copied.caption:
-            await context.bot.edit_message_caption(
+        elif original.caption:
+            await context.bot.send_photo(
                 chat_id=user_id,
-                message_id=copied.message_id,
+                photo=original.photo[-1].file_id,
                 caption=clean_text
             )
+        elif original.document:
+            await context.bot.send_document(
+                chat_id=user_id,
+                document=original.document.file_id,
+                caption=clean_text
+            )
+        
+        await context.bot.delete_message(user_id, original.message_id)
+        
     except TelegramError as e:
-        logger.error(f"Error copiando caso: {e}")
+        logger.error(f"Error enviando caso: {e}")
     
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("A", callback_data=f"ans_A"),
