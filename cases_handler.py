@@ -71,7 +71,6 @@ async def cmd_random_cases(update: Update, context: ContextTypes.DEFAULT_TYPE):
         available = all_cases
         await update.message.reply_text("🎉 ¡Completaste todos los casos! Reiniciando...")
     
-    # CORREGIDO: Usar límite restante del usuario
     remaining = limit - today_solved
     cases_to_send = min(remaining, len(available))
     selected = random.sample(list(available), cases_to_send)
@@ -110,31 +109,26 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     session["current_case"] = case_id
     session["correct_answer"] = correct_answer
     
-    # SOLUCIÓN DEFINITIVA: Extraer file_id y enviar limpio (1 SOLA VEZ)
     tries = 0
     while tries < MAX_RETRIES:
         try:
-            # 1. Forward temporal para extraer file_id
             msg = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
                 message_id=message_id
             )
             
-            # 2. Extraer datos
             text = msg.text or msg.caption or ""
             clean_text = ID_CLEANUP_PATTERN.sub('', text).strip()
             
             photo_id = msg.photo[-1].file_id if msg.photo else None
             doc_id = msg.document.file_id if msg.document else None
             
-            # 3. BORRAR FORWARD INMEDIATAMENTE
             try:
                 await context.bot.delete_message(user_id, msg.message_id)
             except:
                 pass
             
-            # 4. ENVIAR LIMPIO (UNA SOLA VEZ)
             if photo_id:
                 await context.bot.send_photo(
                     chat_id=user_id,
@@ -182,7 +176,6 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
                 await send_case(update, context, user_id)
                 return
     
-    # CORREGIDO: Mostrar contador dinámico
     keyboard = [
         [KeyboardButton("A"), KeyboardButton("B")],
         [KeyboardButton("C"), KeyboardButton("D")]
@@ -270,7 +263,6 @@ async def finish_session(update: Update, context: ContextTypes.DEFAULT_TYPE, use
     correct = session["correct_count"]
     percentage = int((correct / total) * 100) if total > 0 else 0
     
-    # CORREGIDO: Puntaje más claro y escalable
     await context.bot.send_message(
         user_id,
         f"🏁 Sesión completada!\n\n"
