@@ -43,30 +43,25 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
         await query.edit_message_text("❌ Justificación no disponible")
         return
     
-    # ENVIAR JUSTIFICACIONES (sin forward visible)
     for just_id in justification_ids:
         try:
-            # 1. Forward temporal
             msg = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
                 message_id=just_id
             )
             
-            # 2. Extraer datos
             text = msg.text or msg.caption or ""
             clean_text = JUST_CLEANUP_PATTERN.sub('', text).strip()
             
             photo_id = msg.photo[-1].file_id if msg.photo else None
             doc_id = msg.document.file_id if msg.document else None
             
-            # 3. BORRAR FORWARD INMEDIATAMENTE
             try:
                 await context.bot.delete_message(user_id, msg.message_id)
             except:
                 pass
             
-            # 4. ENVIAR LIMPIO (protegido)
             if photo_id:
                 await context.bot.send_photo(
                     chat_id=user_id,
@@ -92,7 +87,6 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
         except TelegramError as e:
             logger.error(f"Error enviando justificación {just_id}: {e}")
     
-    # DESPUÉS DE ENVIAR JUSTIFICACIONES → MENSAJE MOTIVACIONAL
     try:
         from justification_messages import get_weighted_random_message
         motivational_text = get_weighted_random_message()
@@ -110,7 +104,6 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
             InlineKeyboardButton("Siguiente caso ➡️", callback_data="next_case")
         ]])
         
-        # CORREGIDO: Mensaje motivacional AL FINAL
         await context.bot.send_message(
             user_id,
             motivational_text,
