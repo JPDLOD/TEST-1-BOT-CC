@@ -3,13 +3,11 @@ import logging
 import random
 import re
 import asyncio
-import io
 from typing import Set
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError, RetryAfter
 
-from config import JUSTIFICATIONS_CHAT_ID
 from database import (
     get_all_case_ids, get_user_sent_cases, get_case_by_id,
     get_daily_progress, increment_daily_progress, get_or_create_user,
@@ -18,10 +16,6 @@ from database import (
 )
 
 logger = logging.getLogger(__name__)
-
-CASE_PATTERN = re.compile(r'###CASE[_\s]*([A-Z0-9_-]+)', re.IGNORECASE)
-CORRECT_PATTERN = re.compile(r'#([A-D])#', re.IGNORECASE)
-ID_CLEANUP_PATTERN = re.compile(r'###CASE[_\s]*[A-Z0-9_-]+|#[A-D]#', re.IGNORECASE)
 
 user_sessions = {}
 deleted_cases_cache: Set[str] = set()
@@ -53,14 +47,7 @@ async def cmd_random_cases(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = count_cases()
         await update.message.reply_text(
             f"❌ No hay casos disponibles\n\n"
-            f"📊 Casos en BD: {total}\n\n"
-            f"💡 **Formatos aceptados:**\n"
-            f"`###CASE_0001 #A#`\n"
-            f"`###CASE_0001_PED_DENGUE #C#`\n\n"
-            f"📌 **Recuerda:**\n"
-            f"• Usa `#LETRA#` para la respuesta\n"
-            f"• Las letras son: A, B, C o D",
-            parse_mode="Markdown",
+            f"📊 Casos en BD: {total}",
             reply_markup=ReplyKeyboardRemove()
         )
         return
@@ -105,7 +92,7 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
         await send_case(update, context, user_id)
         return
     
-    _, message_id, correct_answer = case_data
+    _, file_id, file_type, caption, correct_answer = case_data
     
     session["current_case"] = case_id
     session["correct_answer"] = correct_answer
@@ -113,130 +100,45 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     tries = 0
     while tries < MAX_RETRIES:
         try:
-            logger.info(f"🔄 Descargando caso {case_id} DIRECTO (sin forward visible)")
+            logger.info(f"📤 Enviando caso {case_id} ({file_type}) con file_id")
             
-            # PASO 1: Forward temporal SOLO para obtener info
-            original_msg = await context.bot.forward_message(
-                chat_id=user_id,
-                from_chat_id=JUSTIFICATIONS_CHAT_ID,
-                message_id=message_id
-            )
-            
-            # PASO 2: Extraer datos
-            text = original_msg.text or original_msg.caption or ""
-            clean_text = ID_CLEANUP_PATTERN.sub('', text).strip()
-            
-            # PASO 3: BORRAR EL FORWARD TEMPORAL INMEDIATAMENTE
-            try:
-                await context.bot.delete_message(user_id, original_msg.message_id)
-                logger.info(f"🗑️ Forward temporal BORRADO antes de enviar limpio")
-            except Exception as del_err:
-                logger.warning(f"⚠️ No se pudo borrar forward temporal: {del_err}")
-            
-            # PASO 4: ENVIAR LIMPIO (sin "Reenviado de")
-            sent_clean = False
-            
-            if original_msg.photo:
-                logger.info(f"📸 Procesando foto del caso {case_id}")
-                photo = original_msg.photo[-1]
-                file = await context.bot.get_file(photo.file_id)
-                
-                photo_bytes = io.BytesIO()
-                await file.download_to_memory(photo_bytes)
-                photo_bytes.seek(0)
-                
-                await context.bot.send_photo(
-                    chat_id=user_id,
-                    photo=photo_bytes,
-                    caption=clean_text if clean_text else None
-                )
-                sent_clean = True
-                logger.info(f"✅ Foto enviada SIN REENVIAR")
-            
-            elif original_msg.document:
-                logger.info(f"📄 Procesando documento del caso {case_id}")
-                doc = original_msg.document
-                file = await context.bot.get_file(doc.file_id)
-                
-                doc_bytes = io.BytesIO()
-                await file.download_to_memory(doc_bytes)
-                doc_bytes.seek(0)
-                
+            if file_type == "document":
                 await context.bot.send_document(
                     chat_id=user_id,
-                    document=doc_bytes,
-                    caption=clean_text if clean_text else None,
-                    filename=doc.file_name or "documento.pdf"
+                    document=file_id,
+                    caption=caption if caption else None
                 )
-                sent_clean = True
-                logger.info(f"✅ Documento enviado SIN REENVIAR")
-            
-            elif original_msg.video:
-                logger.info(f"🎥 Procesando video del caso {case_id}")
-                video = original_msg.video
-                file = await context.bot.get_file(video.file_id)
-                
-                video_bytes = io.BytesIO()
-                await file.download_to_memory(video_bytes)
-                video_bytes.seek(0)
-                
+            elif file_type == "photo":
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=file_id,
+                    caption=caption if caption else None
+                )
+            elif file_type == "video":
                 await context.bot.send_video(
                     chat_id=user_id,
-                    video=video_bytes,
-                    caption=clean_text if clean_text else None
+                    video=file_id,
+                    caption=caption if caption else None
                 )
-                sent_clean = True
-                logger.info(f"✅ Video enviado SIN REENVIAR")
-            
-            elif original_msg.audio:
-                logger.info(f"🎵 Procesando audio del caso {case_id}")
-                audio = original_msg.audio
-                file = await context.bot.get_file(audio.file_id)
-                
-                audio_bytes = io.BytesIO()
-                await file.download_to_memory(audio_bytes)
-                audio_bytes.seek(0)
-                
+            elif file_type == "audio":
                 await context.bot.send_audio(
                     chat_id=user_id,
-                    audio=audio_bytes,
-                    caption=clean_text if clean_text else None
+                    audio=file_id,
+                    caption=caption if caption else None
                 )
-                sent_clean = True
-                logger.info(f"✅ Audio enviado SIN REENVIAR")
-            
-            elif original_msg.voice:
-                logger.info(f"🎤 Procesando nota de voz del caso {case_id}")
-                voice = original_msg.voice
-                file = await context.bot.get_file(voice.file_id)
-                
-                voice_bytes = io.BytesIO()
-                await file.download_to_memory(voice_bytes)
-                voice_bytes.seek(0)
-                
+            elif file_type == "voice":
                 await context.bot.send_voice(
                     chat_id=user_id,
-                    voice=voice_bytes
+                    voice=file_id
                 )
-                if clean_text:
-                    await context.bot.send_message(chat_id=user_id, text=clean_text)
-                sent_clean = True
-                logger.info(f"✅ Nota de voz enviada SIN REENVIAR")
+                if caption:
+                    await context.bot.send_message(chat_id=user_id, text=caption)
+            elif file_type == "text":
+                await context.bot.send_message(chat_id=user_id, text=caption)
             
-            elif clean_text:
-                logger.info(f"💬 Enviando texto del caso {case_id}")
-                await context.bot.send_message(chat_id=user_id, text=clean_text)
-                sent_clean = True
-                logger.info(f"✅ Texto enviado limpio")
-            
-            if sent_clean:
-                save_user_sent_case(user_id, case_id)
-                break
-            else:
-                logger.error(f"❌ No se pudo enviar caso {case_id} - tipo no soportado")
-                session["current_index"] += 1
-                await send_case(update, context, user_id)
-                return
+            logger.info(f"✅ Caso {case_id} enviado exitosamente")
+            save_user_sent_case(user_id, case_id)
+            break
             
         except RetryAfter as e:
             wait = e.retry_after
@@ -247,9 +149,9 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
         except TelegramError as e:
             error = str(e).lower()
             
-            if "message to forward not found" in error or "message not found" in error:
+            if "file_id" in error or "not found" in error:
                 if case_id not in deleted_cases_cache:
-                    logger.warning(f"⚠️ CASO ELIMINADO: {case_id} (msg_id: {message_id})")
+                    logger.warning(f"⚠️ CASO CON file_id INVÁLIDO: {case_id}")
                     deleted_cases_cache.add(case_id)
                     delete_case(case_id)
                 
@@ -262,7 +164,7 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
                 logger.warning(f"⚠️ Intento {tries}/{MAX_RETRIES} falló: {error}")
                 await asyncio.sleep(RETRY_DELAY)
             else:
-                logger.error(f"❌ TIMEOUT persistente: {case_id} - Saltando al siguiente")
+                logger.error(f"❌ ERROR persistente: {case_id} - Saltando")
                 session["current_index"] += 1
                 await send_case(update, context, user_id)
                 return
