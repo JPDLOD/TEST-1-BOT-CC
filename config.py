@@ -10,10 +10,10 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 # AHORA: CASES_UPLOADER_ID (usuario que envía casos y justificaciones)
 CASES_UPLOADER_ID = int(os.environ["CASES_UPLOADER_ID"])
 
-FREE_CHANNEL_ID = int(os.environ["FREE_CHANNEL_ID"])
-SUBS_CHANNEL_ID = int(os.environ["SUBS_CHANNEL_ID"])
-ADMIN_USER_IDS = [int(x) for x in os.environ["ADMIN_USER_IDS"].split(",")]
-DATABASE_URL = os.environ["DATABASE_URL"]
+FREE_CHANNEL_ID = int(os.environ.get("FREE_CHANNEL_ID", "0"))
+SUBS_CHANNEL_ID = int(os.environ.get("SUBS_CHANNEL_ID", "0"))
+ADMIN_USER_IDS = [int(x) for x in os.environ.get("ADMIN_USER_IDS", str(os.environ.get("CASES_UPLOADER_ID", "0"))).split(",")]
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 # Opcionales
 DAILY_CASE_LIMIT = int(os.environ.get("DAILY_CASE_LIMIT", "5"))
