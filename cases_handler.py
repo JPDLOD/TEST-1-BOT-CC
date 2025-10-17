@@ -55,9 +55,31 @@ async def cmd_random_cases(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sent_cases = get_user_sent_cases(user_id)
     available = all_cases - sent_cases
     
+    # Si completó todos, resetear y notificar
     if not available:
+        # Limpiar el historial del usuario para permitir reinicio
+        from database import _get_conn, USE_POSTGRES
+        conn = _get_conn()
+        if USE_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM user_sent_cases WHERE user_id=%s", (user_id,))
+        else:
+            conn.execute("DELETE FROM user_sent_cases WHERE user_id=?", (user_id,))
+            conn.commit()
+        
+        await update.message.reply_text("🎉 ¡Completaste todos los casos! 🔄 Reiniciando catálogo...")
+        
+        # Recargar todos los casos disponibles
         available = all_cases
-        await update.message.reply_text("🎉 ¡Completaste todos los casos! Reiniciando...")
+    
+    # Verificar que hay casos disponibles después del reset
+    if not available:
+        await update.message.reply_text(
+            "❌ No hay casos disponibles en el sistema.\n\n"
+            "Contacta al administrador.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
     
     remaining = limit - today_solved
     cases_to_send = min(remaining, len(available))
