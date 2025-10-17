@@ -113,17 +113,27 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     tries = 0
     while tries < MAX_RETRIES:
         try:
-            logger.info(f"🔄 Descargando caso {case_id} desde canal...")
+            logger.info(f"🔄 Descargando caso {case_id} DIRECTO (sin forward visible)")
             
+            # PASO 1: Forward temporal SOLO para obtener info
             original_msg = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
                 message_id=message_id
             )
             
+            # PASO 2: Extraer datos
             text = original_msg.text or original_msg.caption or ""
             clean_text = ID_CLEANUP_PATTERN.sub('', text).strip()
             
+            # PASO 3: BORRAR EL FORWARD TEMPORAL INMEDIATAMENTE
+            try:
+                await context.bot.delete_message(user_id, original_msg.message_id)
+                logger.info(f"🗑️ Forward temporal BORRADO antes de enviar limpio")
+            except Exception as del_err:
+                logger.warning(f"⚠️ No se pudo borrar forward temporal: {del_err}")
+            
+            # PASO 4: ENVIAR LIMPIO (sin "Reenviado de")
             sent_clean = False
             
             if original_msg.photo:
@@ -141,7 +151,7 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
                     caption=clean_text if clean_text else None
                 )
                 sent_clean = True
-                logger.info(f"✅ Foto enviada limpia (sin forward)")
+                logger.info(f"✅ Foto enviada SIN REENVIAR")
             
             elif original_msg.document:
                 logger.info(f"📄 Procesando documento del caso {case_id}")
@@ -159,7 +169,7 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
                     filename=doc.file_name or "documento.pdf"
                 )
                 sent_clean = True
-                logger.info(f"✅ Documento enviado limpio (sin forward)")
+                logger.info(f"✅ Documento enviado SIN REENVIAR")
             
             elif original_msg.video:
                 logger.info(f"🎥 Procesando video del caso {case_id}")
@@ -176,7 +186,7 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
                     caption=clean_text if clean_text else None
                 )
                 sent_clean = True
-                logger.info(f"✅ Video enviado limpio (sin forward)")
+                logger.info(f"✅ Video enviado SIN REENVIAR")
             
             elif original_msg.audio:
                 logger.info(f"🎵 Procesando audio del caso {case_id}")
@@ -193,7 +203,7 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
                     caption=clean_text if clean_text else None
                 )
                 sent_clean = True
-                logger.info(f"✅ Audio enviado limpio (sin forward)")
+                logger.info(f"✅ Audio enviado SIN REENVIAR")
             
             elif original_msg.voice:
                 logger.info(f"🎤 Procesando nota de voz del caso {case_id}")
@@ -211,19 +221,13 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
                 if clean_text:
                     await context.bot.send_message(chat_id=user_id, text=clean_text)
                 sent_clean = True
-                logger.info(f"✅ Nota de voz enviada limpia (sin forward)")
+                logger.info(f"✅ Nota de voz enviada SIN REENVIAR")
             
             elif clean_text:
                 logger.info(f"💬 Enviando texto del caso {case_id}")
                 await context.bot.send_message(chat_id=user_id, text=clean_text)
                 sent_clean = True
                 logger.info(f"✅ Texto enviado limpio")
-            
-            try:
-                await context.bot.delete_message(user_id, original_msg.message_id)
-                logger.info(f"🗑️ Forward temporal eliminado")
-            except Exception as del_err:
-                logger.warning(f"⚠️ No se pudo borrar forward: {del_err}")
             
             if sent_clean:
                 save_user_sent_case(user_id, case_id)
