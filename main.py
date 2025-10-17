@@ -29,32 +29,52 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Si es el uploader, mostrar info especial
     if user_id == CASES_UPLOADER_ID:
         await update.message.reply_text(
-            "🔧 **Modo Uploader**\n\n"
-            "Envía casos con formato:\n"
-            "`###CASE_0001 #A#` + archivo/texto\n\n"
-            "Envía justificaciones con:\n"
+            "🔧 **Modo Uploader**
+
+"
+            "Envía casos con formato:
+"
+            "`###CASE_0001 #A#` + archivo/texto
+
+"
+            "Envía justificaciones con:
+"
             "`###JUST_0001` + archivo/texto",
             parse_mode="Markdown"
         )
         return
     
     await update.message.reply_text(
-        "👋 ¡Bienvenido a Casos Clínicos Bot!\n\n"
-        "🎯 **Comandos disponibles:**\n"
-        "• /random_cases - 5 casos clínicos aleatorios\n"
-        "• /help - Ver ayuda completa\n\n"
+        "👋 ¡Bienvenido a Casos Clínicos Bot!
+
+"
+        "🎯 **Comandos disponibles:**
+"
+        "• /random_cases - 5 casos clínicos aleatorios
+"
+        "• /help - Ver ayuda completa
+
+"
         "¡Buena suerte! 🔥",
         parse_mode="Markdown"
     )
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 **Comandos disponibles:**\n\n"
-        "📚 **Para usuarios:**\n"
-        "• /start - Iniciar bot\n"
-        "• /random_cases - 5 casos aleatorios\n"
-        "• /help - Ver esta ayuda\n\n"
-        "⏰ **Límite:** 5 casos/día\n"
+        "🤖 **Comandos disponibles:**
+
+"
+        "📚 **Para usuarios:**
+"
+        "• /start - Iniciar bot
+"
+        "• /random_cases - 5 casos aleatorios
+"
+        "• /help - Ver esta ayuda
+
+"
+        "⏰ **Límite:** 5 casos/día
+"
         "🔄 **Reset:** 12:00 AM diario",
         parse_mode="Markdown"
     )
