@@ -2,6 +2,7 @@
 import logging
 import re
 import asyncio
+import io
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
@@ -45,6 +46,8 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     
     for just_id in justification_ids:
         try:
+            logger.info(f"🔄 Descargando justificación {just_id}")
+            
             original_msg = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
@@ -57,10 +60,10 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
             sent_clean = False
             
             if original_msg.photo:
+                logger.info(f"📸 Procesando foto de justificación")
                 photo = original_msg.photo[-1]
                 file = await context.bot.get_file(photo.file_id)
                 
-                import io
                 photo_bytes = io.BytesIO()
                 await file.download_to_memory(photo_bytes)
                 photo_bytes.seek(0)
@@ -72,12 +75,13 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
                     protect_content=True
                 )
                 sent_clean = True
+                logger.info(f"✅ Foto de justificación enviada limpia")
             
             elif original_msg.document:
+                logger.info(f"📄 Procesando documento de justificación")
                 doc = original_msg.document
                 file = await context.bot.get_file(doc.file_id)
                 
-                import io
                 doc_bytes = io.BytesIO()
                 await file.download_to_memory(doc_bytes)
                 doc_bytes.seek(0)
@@ -86,28 +90,68 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
                     chat_id=user_id,
                     document=doc_bytes,
                     caption=clean_text if clean_text else None,
-                    filename=doc.file_name or "documento",
+                    filename=doc.file_name or "justificacion.pdf",
                     protect_content=True
                 )
                 sent_clean = True
+                logger.info(f"✅ Documento de justificación enviado limpio")
+            
+            elif original_msg.video:
+                logger.info(f"🎥 Procesando video de justificación")
+                video = original_msg.video
+                file = await context.bot.get_file(video.file_id)
+                
+                video_bytes = io.BytesIO()
+                await file.download_to_memory(video_bytes)
+                video_bytes.seek(0)
+                
+                await context.bot.send_video(
+                    chat_id=user_id,
+                    video=video_bytes,
+                    caption=clean_text if clean_text else None,
+                    protect_content=True
+                )
+                sent_clean = True
+                logger.info(f"✅ Video de justificación enviado limpio")
+            
+            elif original_msg.audio:
+                logger.info(f"🎵 Procesando audio de justificación")
+                audio = original_msg.audio
+                file = await context.bot.get_file(audio.file_id)
+                
+                audio_bytes = io.BytesIO()
+                await file.download_to_memory(audio_bytes)
+                audio_bytes.seek(0)
+                
+                await context.bot.send_audio(
+                    chat_id=user_id,
+                    audio=audio_bytes,
+                    caption=clean_text if clean_text else None,
+                    protect_content=True
+                )
+                sent_clean = True
+                logger.info(f"✅ Audio de justificación enviado limpio")
             
             elif clean_text:
+                logger.info(f"💬 Enviando texto de justificación")
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=clean_text,
                     protect_content=True
                 )
                 sent_clean = True
+                logger.info(f"✅ Texto de justificación enviado")
             
             try:
                 await context.bot.delete_message(user_id, original_msg.message_id)
-            except:
-                pass
+                logger.info(f"🗑️ Forward temporal de justificación eliminado")
+            except Exception as del_err:
+                logger.warning(f"⚠️ No se pudo borrar forward: {del_err}")
             
             await asyncio.sleep(0.3)
             
         except TelegramError as e:
-            logger.error(f"Error enviando justificación {just_id}: {e}")
+            logger.error(f"❌ Error enviando justificación {just_id}: {e}")
     
     try:
         from justification_messages import get_weighted_random_message
