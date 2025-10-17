@@ -55,7 +55,7 @@ async def handle_uploader_message(update: Update, context: ContextTypes.DEFAULT_
         if file_id and file_type:
             save_case(case_id, file_id, file_type, clean_text, correct_answer)
             logger.info(f"✅ Caso guardado: {case_id} ({file_type}) → Respuesta: {correct_answer}")
-            await msg.reply_text(f"✅ **Caso guardado**\n\n• ID: `{case_id}`\n• Tipo: {file_type}\n• Respuesta correcta: {correct_answer}", parse_mode="Markdown")
+            await msg.reply_text(f"✅ Caso guardado\n\nID: {case_id}\nTipo: {file_type}\nRespuesta correcta: {correct_answer}")
         else:
             await msg.reply_text("❌ No se pudo detectar contenido válido")
         return
@@ -87,7 +87,7 @@ async def handle_uploader_message(update: Update, context: ContextTypes.DEFAULT_
         if file_id and file_type:
             save_justification(case_id, file_id, file_type, clean_text)
             logger.info(f"✅ Justificación guardada para: {case_id} ({file_type})")
-            await msg.reply_text(f"✅ **Justificación guardada**\n\n• Para caso: `{case_id}`\n• Tipo: {file_type}", parse_mode="Markdown")
+            await msg.reply_text(f"✅ Justificación guardada\n\nPara caso: {case_id}\nTipo: {file_type}")
         else:
             await msg.reply_text("❌ No se pudo detectar contenido válido")
         return
@@ -101,15 +101,15 @@ async def cmd_refresh_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE
     total = count_cases()
     all_ids = get_all_case_ids()
     
-    response = f"✅ Catálogo actualizado\n\n📊 **Estado:**\n• Total de casos: {total}\n\n"
+    response = f"✅ Catálogo actualizado\n\n📊 Estado\nTotal de casos: {total}\n\n"
     if all_ids:
-        response += "📋 **Últimos 10 casos:**\n"
+        response += "📋 Últimos 10 casos\n"
         for case_id in all_ids[-10:]:
-            response += f"• `{case_id}`\n"
+            response += f"• {case_id}\n"
     else:
-        response += "⚠️ **No hay casos en la BD**\n\n💡 **Formato esperado:**\n`###CASE_0001 #A#`\n\n**Ejemplos válidos:**\n• `###CASE_0001 #A#`\n• `###CASE_0001_PED_DENGUE #C#`\n"
+        response += "⚠️ No hay casos en la BD\n\n💡 Formato esperado\n###CASE_0001 #A#\n\nEjemplos válidos\n• ###CASE_0001 #A#\n• ###CASE_0001_PED_DENGUE #C#"
     
-    await msg.edit_text(response, parse_mode="Markdown")
+    await msg.edit_text(response)
 
 async def cmd_replace_caso(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from admin_panel import is_admin
@@ -117,15 +117,15 @@ async def cmd_replace_caso(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not context.args or len(context.args) < 1:
-        await update.message.reply_text("**Uso:** `/replace_caso ###CASE_0001`\n\nEsto eliminará el caso de la BD.\nLuego puedes enviar el nuevo caso con el mismo ID.", parse_mode="Markdown")
+        await update.message.reply_text("Uso: /replace_caso ###CASE_0001\n\nEsto eliminará el caso de la BD.\nLuego puedes enviar el nuevo caso con el mismo ID.")
         return
     
     case_id = context.args[0]
     caso = get_case_by_id(case_id)
     
     if not caso:
-        await update.message.reply_text(f"❌ Caso `{case_id}` no existe en BD", parse_mode="Markdown")
+        await update.message.reply_text(f"❌ Caso {case_id} no existe en BD")
         return
     
     delete_case(case_id)
-    await update.message.reply_text(f"✅ Caso `{case_id}` eliminado de la BD\n\nAhora puedes enviar el nuevo caso con el mismo ID.", parse_mode="Markdown")
+    await update.message.reply_text(f"✅ Caso {case_id} eliminado de la BD\n\nAhora puedes enviar el nuevo caso con el mismo ID.")
