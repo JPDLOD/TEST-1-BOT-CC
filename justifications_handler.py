@@ -45,45 +45,67 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     
     for just_id in justification_ids:
         try:
-            msg = await context.bot.forward_message(
+            original_msg = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
                 message_id=just_id
             )
             
-            text = msg.text or msg.caption or ""
+            text = original_msg.text or original_msg.caption or ""
             clean_text = JUST_CLEANUP_PATTERN.sub('', text).strip()
             
-            photo_id = msg.photo[-1].file_id if msg.photo else None
-            doc_id = msg.document.file_id if msg.document else None
+            sent_clean = False
             
-            try:
-                await context.bot.delete_message(user_id, msg.message_id)
-            except:
-                pass
-            
-            if photo_id:
+            if original_msg.photo:
+                photo = original_msg.photo[-1]
+                file = await context.bot.get_file(photo.file_id)
+                
+                import io
+                photo_bytes = io.BytesIO()
+                await file.download_to_memory(photo_bytes)
+                photo_bytes.seek(0)
+                
                 await context.bot.send_photo(
                     chat_id=user_id,
-                    photo=photo_id,
+                    photo=photo_bytes,
                     caption=clean_text if clean_text else None,
                     protect_content=True
                 )
-            elif doc_id:
+                sent_clean = True
+            
+            elif original_msg.document:
+                doc = original_msg.document
+                file = await context.bot.get_file(doc.file_id)
+                
+                import io
+                doc_bytes = io.BytesIO()
+                await file.download_to_memory(doc_bytes)
+                doc_bytes.seek(0)
+                
                 await context.bot.send_document(
                     chat_id=user_id,
-                    document=doc_id,
+                    document=doc_bytes,
                     caption=clean_text if clean_text else None,
+                    filename=doc.file_name or "documento",
                     protect_content=True
                 )
+                sent_clean = True
+            
             elif clean_text:
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=clean_text,
                     protect_content=True
                 )
+                sent_clean = True
+            
+            try:
+                await context.bot.delete_message(user_id, original_msg.message_id)
+            except:
+                pass
             
             await asyncio.sleep(0.3)
+            
         except TelegramError as e:
             logger.error(f"Error enviando justificación {just_id}: {e}")
     
