@@ -24,78 +24,107 @@ MAX_RETRIES = 3
 RETRY_DELAY = 2
 
 async def cmd_random_cases(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    username = update.effective_user.username or ""
-    first_name = update.effective_user.first_name or ""
-    
-    user = get_or_create_user(user_id, username, first_name)
-    
-    today_solved = get_daily_progress(user_id)
-    limit = user["daily_limit"]
-    
-    if today_solved >= limit:
-        await update.message.reply_text(
-            f"🔥 Ya completaste tus {limit} casos de hoy.\n"
-            f"Vuelve mañana a las 12:00 AM para más.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return
-    
-    all_cases = set(get_all_case_ids())
-    
-    if not all_cases:
-        total = count_cases()
-        await update.message.reply_text(
-            f"❌ No hay casos disponibles\n\n"
-            f"📊 Casos en BD: {total}",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return
-    
-    sent_cases = get_user_sent_cases(user_id)
-    available = all_cases - sent_cases
-    
-    # Si completó todos, resetear y notificar
-    if not available:
-        # Limpiar el historial del usuario para permitir reinicio
-        from database import _get_conn, USE_POSTGRES
-        conn = _get_conn()
-        if USE_POSTGRES:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM user_sent_cases WHERE user_id=%s", (user_id,))
-        else:
-            conn.execute("DELETE FROM user_sent_cases WHERE user_id=?", (user_id,))
-            conn.commit()
+    """VERSIÓN CON DEBUG EXTREMO"""
+    try:
+        logger.info("🔥 COMANDO /random_cases EJECUTADO")
+        await update.message.reply_text("🔄 Procesando solicitud...")
         
-        await update.message.reply_text("🎉 ¡Completaste todos los casos! 🔄 Reiniciando catálogo...")
+        user_id = update.effective_user.id
+        username = update.effective_user.username or ""
+        first_name = update.effective_user.first_name or ""
         
-        # Recargar todos los casos disponibles
-        available = all_cases
-    
-    # Verificar que hay casos disponibles después del reset
-    if not available:
-        await update.message.reply_text(
-            "❌ No hay casos disponibles en el sistema.\n\n"
-            "Contacta al administrador.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return
-    
-    remaining = limit - today_solved
-    cases_to_send = min(remaining, len(available))
-    selected = random.sample(list(available), cases_to_send)
-    
-    user_sessions[user_id] = {
-        "cases": selected,
-        "current_index": 0,
-        "correct_count": 0
-    }
-    
-    await send_case(update, context, user_id)
+        logger.info(f"👤 Usuario: {user_id} (@{username})")
+        
+        user = get_or_create_user(user_id, username, first_name)
+        logger.info(f"✅ Usuario creado/recuperado: {user}")
+        
+        today_solved = get_daily_progress(user_id)
+        limit = user["daily_limit"]
+        
+        logger.info(f"📊 Progreso hoy: {today_solved}/{limit}")
+        
+        if today_solved >= limit:
+            await update.message.reply_text(
+                f"🔥 Ya completaste tus {limit} casos de hoy.\n"
+                f"Vuelve mañana a las 12:00 AM para más.",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return
+        
+        # VERIFICACIÓN EXHAUSTIVA DE CASOS
+        total_in_db = count_cases()
+        logger.info(f"📚 Total casos en BD: {total_in_db}")
+        await update.message.reply_text(f"📚 Total casos en BD: {total_in_db}")
+        
+        all_cases = set(get_all_case_ids())
+        logger.info(f"📋 Casos recuperados: {len(all_cases)}")
+        await update.message.reply_text(f"📋 Casos recuperados: {len(all_cases)}")
+        
+        if all_cases:
+            logger.info(f"🔍 Primeros 5 casos: {list(all_cases)[:5]}")
+            await update.message.reply_text(f"🔍 Muestra: {list(all_cases)[:5]}")
+        
+        if not all_cases:
+            await update.message.reply_text(
+                f"❌ No hay casos disponibles\n\n"
+                f"📊 Total en BD: {total_in_db}\n"
+                f"🔍 IDs recuperados: {len(all_cases)}",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return
+        
+        sent_cases = get_user_sent_cases(user_id)
+        logger.info(f"📤 Casos ya enviados al usuario: {len(sent_cases)}")
+        
+        available = all_cases - sent_cases
+        logger.info(f"✅ Casos disponibles: {len(available)}")
+        await update.message.reply_text(f"✅ Casos disponibles para ti: {len(available)}")
+        
+        # Si completó todos, resetear
+        if not available:
+            from database import _get_conn, USE_POSTGRES
+            conn = _get_conn()
+            if USE_POSTGRES:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM user_sent_cases WHERE user_id=%s", (user_id,))
+            else:
+                conn.execute("DELETE FROM user_sent_cases WHERE user_id=?", (user_id,))
+                conn.commit()
+            
+            await update.message.reply_text("🎉 ¡Completaste todos los casos! 🔄 Reiniciando catálogo...")
+            available = all_cases
+        
+        if not available:
+            await update.message.reply_text(
+                "❌ No hay casos disponibles después del reset.\n\n"
+                "Contacta al administrador.",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return
+        
+        remaining = limit - today_solved
+        cases_to_send = min(remaining, len(available))
+        selected = random.sample(list(available), cases_to_send)
+        
+        logger.info(f"🎯 Casos seleccionados: {selected}")
+        await update.message.reply_text(f"🎯 Enviando {len(selected)} casos...")
+        
+        user_sessions[user_id] = {
+            "cases": selected,
+            "current_index": 0,
+            "correct_count": 0
+        }
+        
+        await send_case(update, context, user_id)
+        
+    except Exception as e:
+        logger.exception(f"💥 ERROR CRÍTICO en cmd_random_cases: {e}")
+        await update.message.reply_text(f"💥 ERROR: {str(e)}")
 
 async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     session = user_sessions.get(user_id)
     if not session:
+        await context.bot.send_message(user_id, "❌ Sesión no encontrada")
         return
     
     idx = session["current_index"]
@@ -106,15 +135,19 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
         return
     
     case_id = cases[idx]
+    logger.info(f"📤 Intentando enviar caso: {case_id}")
+    
     case_data = get_case_by_id(case_id)
     
     if not case_data:
         logger.warning(f"⚠️ Caso {case_id} no existe en DB")
+        await context.bot.send_message(user_id, f"⚠️ Caso {case_id} no existe")
         session["current_index"] += 1
         await send_case(update, context, user_id)
         return
     
     _, file_id, file_type, caption, correct_answer = case_data
+    logger.info(f"✅ Caso encontrado: tipo={file_type}, respuesta={correct_answer}")
     
     session["current_case"] = case_id
     session["correct_answer"] = correct_answer
@@ -122,37 +155,18 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     tries = 0
     while tries < MAX_RETRIES:
         try:
-            logger.info(f"📤 Enviando caso {case_id} ({file_type}) con file_id")
+            logger.info(f"📤 Enviando caso {case_id} ({file_type})")
             
             if file_type == "document":
-                await context.bot.send_document(
-                    chat_id=user_id,
-                    document=file_id,
-                    caption=caption if caption else None
-                )
+                await context.bot.send_document(chat_id=user_id, document=file_id, caption=caption if caption else None)
             elif file_type == "photo":
-                await context.bot.send_photo(
-                    chat_id=user_id,
-                    photo=file_id,
-                    caption=caption if caption else None
-                )
+                await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=caption if caption else None)
             elif file_type == "video":
-                await context.bot.send_video(
-                    chat_id=user_id,
-                    video=file_id,
-                    caption=caption if caption else None
-                )
+                await context.bot.send_video(chat_id=user_id, video=file_id, caption=caption if caption else None)
             elif file_type == "audio":
-                await context.bot.send_audio(
-                    chat_id=user_id,
-                    audio=file_id,
-                    caption=caption if caption else None
-                )
+                await context.bot.send_audio(chat_id=user_id, audio=file_id, caption=caption if caption else None)
             elif file_type == "voice":
-                await context.bot.send_voice(
-                    chat_id=user_id,
-                    voice=file_id
-                )
+                await context.bot.send_voice(chat_id=user_id, voice=file_id)
                 if caption:
                     await context.bot.send_message(chat_id=user_id, text=caption)
             elif file_type == "text":
@@ -170,10 +184,11 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
             
         except TelegramError as e:
             error = str(e).lower()
+            logger.error(f"❌ Error Telegram: {error}")
             
             if "file_id" in error or "not found" in error:
                 if case_id not in deleted_cases_cache:
-                    logger.warning(f"⚠️ CASO CON file_id INVÁLIDO: {case_id}")
+                    logger.warning(f"⚠️ file_id inválido: {case_id}")
                     deleted_cases_cache.add(case_id)
                     delete_case(case_id)
                 
@@ -183,10 +198,10 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
             
             tries += 1
             if tries < MAX_RETRIES:
-                logger.warning(f"⚠️ Intento {tries}/{MAX_RETRIES} falló: {error}")
+                logger.warning(f"⚠️ Intento {tries}/{MAX_RETRIES}")
                 await asyncio.sleep(RETRY_DELAY)
             else:
-                logger.error(f"❌ ERROR persistente: {case_id} - Saltando")
+                logger.error(f"❌ Saltando caso {case_id}")
                 session["current_index"] += 1
                 await send_case(update, context, user_id)
                 return
@@ -195,12 +210,7 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
         [KeyboardButton("A"), KeyboardButton("B")],
         [KeyboardButton("C"), KeyboardButton("D")]
     ]
-    reply_markup = ReplyKeyboardMarkup(
-        keyboard, 
-        resize_keyboard=True,
-        one_time_keyboard=False,
-        input_field_placeholder="Selecciona tu respuesta..."
-    )
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     
     await context.bot.send_message(
         chat_id=user_id,
@@ -218,10 +228,7 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = user_sessions.get(user_id)
     
     if not session or "current_case" not in session:
-        await update.message.reply_text(
-            "❌ Sesión expirada. Usa /random_cases",
-            reply_markup=ReplyKeyboardRemove()
-        )
+        await update.message.reply_text("❌ Sesión expirada. Usa /random_cases", reply_markup=ReplyKeyboardRemove())
         return
     
     answer = text
@@ -250,21 +257,13 @@ async def handle_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result_text = "🎉 ¡CORRECTO!" if is_correct else f"❌ Incorrecto. La respuesta era: {correct}"
     
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(f"Ver justificación 📚", callback_data=f"just_{case_id}")
-    ]])
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(f"Ver justificación 📚", callback_data=f"just_{case_id}")]])
     
-    await update.message.reply_text(
-        f"{result_text}\n{stats_text}",
-        reply_markup=keyboard
-    )
+    await update.message.reply_text(f"{result_text}\n{stats_text}", reply_markup=keyboard)
     
     if is_correct:
         try:
-            sticker_ids = [
-                "CAACAgIAAxkBAAEMYjZnYP5T9k7LRgABm0VZhqP-AAFU8TkAAh0AA2J5xgoj3b0zzBYmwB4E",
-                "CAACAgIAAxkBAAEMYjhnYP5kKQABbNf1N-WkBqCYe9fO4wACHgADYnnGCqOTU8YAAcYHNh4E"
-            ]
+            sticker_ids = ["CAACAgIAAxkBAAEMYjZnYP5T9k7LRgABm0VZhqP-AAFU8TkAAh0AA2J5xgoj3b0zzBYmwB4E"]
             await context.bot.send_sticker(user_id, random.choice(sticker_ids))
         except:
             pass
@@ -278,14 +277,10 @@ async def finish_session(update: Update, context: ContextTypes.DEFAULT_TYPE, use
     correct = session["correct_count"]
     percentage = int((correct / total) * 100) if total > 0 else 0
     
-    filled = int((correct / total) * 5) if total > 0 else 0
-    progress_bar = "█" * filled + "░" * (5 - filled)
-    
     await context.bot.send_message(
         user_id,
         f"🏁 **Sesión completada!**\n\n"
-        f"🎯 **Puntaje:** {correct}/{total} ({percentage}%)\n"
-        f"📊 {progress_bar}\n\n"
+        f"🎯 **Puntaje:** {correct}/{total} ({percentage}%)\n\n"
         f"✅ Correctas: {correct}\n"
         f"❌ Incorrectas: {total - correct}\n\n"
         f"🔥 ¡Vuelve mañana para más casos!",
