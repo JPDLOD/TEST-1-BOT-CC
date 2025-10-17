@@ -112,40 +112,74 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     tries = 0
     while tries < MAX_RETRIES:
         try:
-            msg = await context.bot.forward_message(
+            # SOLUCIÓN DEFINITIVA: Descargar y reenviar sin forward
+            original_msg = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
                 message_id=message_id
             )
             
-            text = msg.text or msg.caption or ""
+            text = original_msg.text or original_msg.caption or ""
             clean_text = ID_CLEANUP_PATTERN.sub('', text).strip()
             
-            photo_id = msg.photo[-1].file_id if msg.photo else None
-            doc_id = msg.document.file_id if msg.document else None
+            sent_clean = False
             
+            # Si tiene foto, descargarla y reenviarla
+            if original_msg.photo:
+                photo = original_msg.photo[-1]
+                file = await context.bot.get_file(photo.file_id)
+                
+                # Descargar a bytes
+                import io
+                photo_bytes = io.BytesIO()
+                await file.download_to_memory(photo_bytes)
+                photo_bytes.seek(0)
+                
+                # Enviar como nueva (SIN forward)
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=photo_bytes,
+                    caption=clean_text if clean_text else None
+                )
+                sent_clean = True
+            
+            # Si tiene documento
+            elif original_msg.document:
+                doc = original_msg.document
+                file = await context.bot.get_file(doc.file_id)
+                
+                import io
+                doc_bytes = io.BytesIO()
+                await file.download_to_memory(doc_bytes)
+                doc_bytes.seek(0)
+                
+                await context.bot.send_document(
+                    chat_id=user_id,
+                    document=doc_bytes,
+                    caption=clean_text if clean_text else None,
+                    filename=doc.file_name or "documento"
+                )
+                sent_clean = True
+            
+            # Solo texto
+            elif clean_text:
+                await context.bot.send_message(chat_id=user_id, text=clean_text)
+                sent_clean = True
+            
+            # BORRAR el forward original
             try:
-                await context.bot.delete_message(user_id, msg.message_id)
+                await context.bot.delete_message(user_id, original_msg.message_id)
             except:
                 pass
             
-            if photo_id:
-                await context.bot.send_photo(
-                    chat_id=user_id,
-                    photo=photo_id,
-                    caption=clean_text if clean_text else None
-                )
-            elif doc_id:
-                await context.bot.send_document(
-                    chat_id=user_id,
-                    document=doc_id,
-                    caption=clean_text if clean_text else None
-                )
-            elif clean_text:
-                await context.bot.send_message(chat_id=user_id, text=clean_text)
-            
-            save_user_sent_case(user_id, case_id)
-            break
+            if sent_clean:
+                save_user_sent_case(user_id, case_id)
+                break
+            else:
+                logger.error(f"❌ No se pudo enviar caso {case_id}")
+                session["current_index"] += 1
+                await send_case(update, context, user_id)
+                return
             
         except RetryAfter as e:
             wait = e.retry_after
@@ -263,13 +297,19 @@ async def finish_session(update: Update, context: ContextTypes.DEFAULT_TYPE, use
     correct = session["correct_count"]
     percentage = int((correct / total) * 100) if total > 0 else 0
     
+    # Crear barra visual
+    filled = int((correct / total) * 5) if total > 0 else 0
+    progress_bar = "█" * filled + "░" * (5 - filled)
+    
     await context.bot.send_message(
         user_id,
-        f"🏁 Sesión completada!\n\n"
-        f"🎯 Puntaje: {correct}/{total} ({percentage}%)\n"
+        f"🏁 **Sesión completada!**\n\n"
+        f"🎯 **Puntaje:** {correct}/{total} ({percentage}%)\n"
+        f"📊 {progress_bar}\n\n"
         f"✅ Correctas: {correct}\n"
         f"❌ Incorrectas: {total - correct}\n\n"
         f"🔥 ¡Vuelve mañana para más casos!",
+        parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
     
