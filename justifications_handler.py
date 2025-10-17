@@ -30,41 +30,16 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
         try:
             logger.info(f"📤 Enviando justificación ({file_type}) con file_id")
             
-            # Enviar DIRECTO con file_id
             if file_type == "document":
-                await context.bot.send_document(
-                    chat_id=user_id,
-                    document=file_id,
-                    caption=caption if caption else None,
-                    protect_content=True
-                )
+                await context.bot.send_document(chat_id=user_id, document=file_id, caption=caption if caption else None, protect_content=True)
             elif file_type == "photo":
-                await context.bot.send_photo(
-                    chat_id=user_id,
-                    photo=file_id,
-                    caption=caption if caption else None,
-                    protect_content=True
-                )
+                await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=caption if caption else None, protect_content=True)
             elif file_type == "video":
-                await context.bot.send_video(
-                    chat_id=user_id,
-                    video=file_id,
-                    caption=caption if caption else None,
-                    protect_content=True
-                )
+                await context.bot.send_video(chat_id=user_id, video=file_id, caption=caption if caption else None, protect_content=True)
             elif file_type == "audio":
-                await context.bot.send_audio(
-                    chat_id=user_id,
-                    audio=file_id,
-                    caption=caption if caption else None,
-                    protect_content=True
-                )
+                await context.bot.send_audio(chat_id=user_id, audio=file_id, caption=caption if caption else None, protect_content=True)
             elif file_type == "text":
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=caption,
-                    protect_content=True
-                )
+                await context.bot.send_message(chat_id=user_id, text=caption, protect_content=True)
             
             logger.info(f"✅ Justificación enviada exitosamente")
             await asyncio.sleep(0.3)
@@ -85,22 +60,14 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
         session["current_index"] += 1
         increment_daily_progress(user_id)
         
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Siguiente caso ➡️", callback_data="next_case")
-        ]])
-        
-        await context.bot.send_message(
-            user_id,
-            motivational_text,
-            reply_markup=keyboard
-        )
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Siguiente caso ➡️", callback_data="next_case")]])
+        await context.bot.send_message(user_id, motivational_text, reply_markup=keyboard)
     else:
         await context.bot.send_message(user_id, motivational_text)
 
 async def handle_next_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     user_id = query.from_user.id
     
     from cases_handler import send_case
