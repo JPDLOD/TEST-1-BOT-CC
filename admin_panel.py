@@ -56,9 +56,10 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(
             "👥 Gestión de Usuarios\n\n"
             "Comandos:\n"
-            "/set_limit @user 10 - Cambiar límite\n"
-            "/set_sub @user 1 - Activar subscripción\n"
-            "/set_sub @user 0 - Desactivar subscripción"
+            "/set_limit USER_ID 10 - Cambiar límite\n"
+            "/set_sub USER_ID 1 - Activar subscripción\n"
+            "/set_sub USER_ID 0 - Desactivar subscripción\n\n"
+            "⚠️ Usa el ID numérico, no @username"
         )
     
     elif data == "admin_cases":
@@ -73,64 +74,85 @@ async def cmd_set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if len(context.args) < 2:
-        await update.message.reply_text("Uso: /set_limit @username 10")
+        await update.message.reply_text(
+            "**Uso:** `/set_limit USER_ID 10`\n\n"
+            "Para obtener el USER_ID, reenvía un mensaje del usuario al bot @userinfobot",
+            parse_mode="Markdown"
+        )
         return
     
-    username = context.args[0].replace("@", "").lower()
-    limit = int(context.args[1])
-    
-    from database import _get_conn
-    conn = _get_conn()
-    
-    from database import USE_POSTGRES
-    if USE_POSTGRES:
-        with conn.cursor() as cur:
-            cur.execute("SELECT user_id FROM users WHERE LOWER(username)=%s", (username,))
-            row = cur.fetchone()
-    else:
-        cur = conn.execute("SELECT user_id FROM users WHERE LOWER(username)=?", (username,))
-        row = cur.fetchone()
-    
-    if not row:
-        await update.message.reply_text("❌ Usuario no encontrado")
+    try:
+        user_id = int(context.args[0])
+        limit = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("❌ USER_ID y límite deben ser números")
         return
-    
-    user_id = row['user_id'] if USE_POSTGRES else row[0]
-    set_user_limit(user_id, limit)
-    
-    await update.message.reply_text(f"✅ Límite de @{username} actualizado a {limit}")
-
-async def cmd_set_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    
-    if len(context.args) < 2:
-        await update.message.reply_text("Uso: /set_sub @username 1")
-        return
-    
-    username = context.args[0].replace("@", "").lower()
-    is_sub = int(context.args[1])
     
     from database import _get_conn, USE_POSTGRES
     conn = _get_conn()
     
     if USE_POSTGRES:
         with conn.cursor() as cur:
-            cur.execute("SELECT user_id FROM users WHERE LOWER(username)=%s", (username,))
+            cur.execute("SELECT username FROM users WHERE user_id=%s", (user_id,))
             row = cur.fetchone()
     else:
-        cur = conn.execute("SELECT user_id FROM users WHERE LOWER(username)=?", (username,))
+        cur = conn.execute("SELECT username FROM users WHERE user_id=?", (user_id,))
         row = cur.fetchone()
     
     if not row:
-        await update.message.reply_text("❌ Usuario no encontrado")
+        await update.message.reply_text(
+            f"❌ Usuario {user_id} no encontrado.\n\n"
+            f"El usuario debe haber usado /start o /random_cases primero."
+        )
         return
     
-    user_id = row['user_id'] if USE_POSTGRES else row[0]
+    set_user_limit(user_id, limit)
+    
+    username = row['username'] if USE_POSTGRES else row[0]
+    await update.message.reply_text(f"✅ Límite de {username or user_id} actualizado a {limit}")
+
+async def cmd_set_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "**Uso:** `/set_sub USER_ID 1`\n\n"
+            "Para obtener el USER_ID, reenvía un mensaje del usuario al bot @userinfobot",
+            parse_mode="Markdown"
+        )
+        return
+    
+    try:
+        user_id = int(context.args[0])
+        is_sub = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("❌ USER_ID y valor deben ser números")
+        return
+    
+    from database import _get_conn, USE_POSTGRES
+    conn = _get_conn()
+    
+    if USE_POSTGRES:
+        with conn.cursor() as cur:
+            cur.execute("SELECT username FROM users WHERE user_id=%s", (user_id,))
+            row = cur.fetchone()
+    else:
+        cur = conn.execute("SELECT username FROM users WHERE user_id=?", (user_id,))
+        row = cur.fetchone()
+    
+    if not row:
+        await update.message.reply_text(
+            f"❌ Usuario {user_id} no encontrado.\n\n"
+            f"El usuario debe haber usado /start o /random_cases primero."
+        )
+        return
+    
     set_user_subscriber(user_id, is_sub)
     
+    username = row['username'] if USE_POSTGRES else row[0]
     status = "activada" if is_sub else "desactivada"
-    await update.message.reply_text(f"✅ Subscripción de @{username} {status}")
+    await update.message.reply_text(f"✅ Subscripción de {username or user_id} {status}")
 
 def parse_message_with_buttons(text: str):
     buttons = []
