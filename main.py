@@ -1,116 +1,131 @@
 # -*- coding: utf-8 -*-
 import logging
+import re
 from telegram import Update
-from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import ContextTypes
 
-from config import BOT_TOKEN, CASES_UPLOADER_ID
-from database import init_db, count_cases
-from cases_handler import cmd_random_cases, handle_answer
-from justifications_handler import handle_justification_request, handle_next_case
-from channels_handler import handle_uploader_message, cmd_refresh_catalog, cmd_replace_caso
-from admin_panel import cmd_admin, cmd_set_limit, cmd_set_sub, handle_admin_callback, is_admin
+from config import CASES_UPLOADER_ID
+from database import save_case, save_justification, count_cases, get_case_by_id, delete_case, get_all_case_ids
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-init_db()
+CASE_PATTERN = re.compile(r'###CASE[_\s]*([A-Z0-9_-]+)', re.IGNORECASE)
+CORRECT_PATTERN = re.compile(r'#([A-D])#', re.IGNORECASE)
+JUST_PATTERN = re.compile(r'###JUST[_\s]*([A-Z0-9_-]+)', re.IGNORECASE)
 
-total_cases = count_cases()
-if total_cases == 0:
-    logger.warning("⚠️ No hay casos en la base de datos")
-    logger.info(f"📤 ID del uploader autorizado: {CASES_UPLOADER_ID}")
-    logger.info("💡 Envía casos al bot con formato: ###CASE_0001 #A#")
-else:
-    logger.info(f"📚 {total_cases} casos disponibles")
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_uploader_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
     user_id = update.effective_user.id
     
-    # Si es el uploader, mostrar info especial
-    if user_id == CASES_UPLOADER_ID:
-        text = (
-            "🔧 **Modo Uploader**\n\n"
-            "Envía casos con formato:\n"
-            "`###CASE_0001 #A#` + archivo/texto\n\n"
-            "Envía justificaciones con:\n"
-            "`###JUST_0001` + archivo/texto"
-        )
-        await update.message.reply_text(text, parse_mode="Markdown")
+    if user_id != CASES_UPLOADER_ID:
         return
     
-    text = (
-        "👋 ¡Bienvenido a Casos Clínicos Bot!\n\n"
-        "🎯 **Comandos disponibles:**\n"
-        "• /random_cases - 5 casos clínicos aleatorios\n"
-        "• /help - Ver ayuda completa\n\n"
-        "¡Buena suerte! 🔥"
-    )
-    await update.message.reply_text(text, parse_mode="Markdown")
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🤖 **Comandos disponibles:**\n\n"
-        "📚 **Para usuarios:**\n"
-        "• /start - Iniciar bot\n"
-        "• /random_cases - 5 casos aleatorios\n"
-        "• /help - Ver esta ayuda\n\n"
-        "⏰ **Límite:** 5 casos/día\n"
-        "🔄 **Reset:** 12:00 AM diario"
-    )
-    await update.message.reply_text(text, parse_mode="Markdown")
-
-async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
+    text = msg.text or msg.caption or ""
+    
+    case_match = CASE_PATTERN.search(text)
+    if case_match:
+        case_id = f"###CASE_{case_match.group(1)}"
+        correct_match = CORRECT_PATTERN.search(text)
+        correct_answer = correct_match.group(1).upper() if correct_match else "A"
+        clean_text = CASE_PATTERN.sub('', text)
+        clean_text = CORRECT_PATTERN.sub('', clean_text).strip()
+        
+        file_id = None
+        file_type = None
+        
+        if msg.document:
+            file_id = msg.document.file_id
+            file_type = "document"
+        elif msg.photo:
+            file_id = msg.photo[-1].file_id
+            file_type = "photo"
+        elif msg.video:
+            file_id = msg.video.file_id
+            file_type = "video"
+        elif msg.audio:
+            file_id = msg.audio.file_id
+            file_type = "audio"
+        elif msg.voice:
+            file_id = msg.voice.file_id
+            file_type = "voice"
+        elif clean_text:
+            file_id = f"text_{case_id}"
+            file_type = "text"
+        
+        if file_id and file_type:
+            save_case(case_id, file_id, file_type, clean_text, correct_answer)
+            logger.info(f"✅ Caso guardado: {case_id} ({file_type}) → Respuesta: {correct_answer}")
+            await msg.reply_text(f"✅ Caso guardado\n\nID: {case_id}\nTipo: {file_type}\nRespuesta correcta: {correct_answer}")
+        else:
+            await msg.reply_text("❌ No se pudo detectar contenido válido")
         return
     
-    user_id = update.effective_user.id
-    
-    # PRIORIDAD 1: Si es el uploader, procesar casos/justificaciones
-    if user_id == CASES_UPLOADER_ID:
-        await handle_uploader_message(update, context)
+    just_match = JUST_PATTERN.search(text)
+    if just_match:
+        case_id = f"###CASE_{just_match.group(1)}"
+        clean_text = JUST_PATTERN.sub('', text).strip()
+        
+        file_id = None
+        file_type = None
+        
+        if msg.document:
+            file_id = msg.document.file_id
+            file_type = "document"
+        elif msg.photo:
+            file_id = msg.photo[-1].file_id
+            file_type = "photo"
+        elif msg.video:
+            file_id = msg.video.file_id
+            file_type = "video"
+        elif msg.audio:
+            file_id = msg.audio.file_id
+            file_type = "audio"
+        elif clean_text:
+            file_id = f"text_{case_id}_just"
+            file_type = "text"
+        
+        if file_id and file_type:
+            save_justification(case_id, file_id, file_type, clean_text)
+            logger.info(f"✅ Justificación guardada para: {case_id} ({file_type})")
+            await msg.reply_text(f"✅ Justificación guardada\n\nPara caso: {case_id}\nTipo: {file_type}")
+        else:
+            await msg.reply_text("❌ No se pudo detectar contenido válido")
+        return
+
+async def cmd_refresh_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from admin_panel import is_admin
+    if not is_admin(update.effective_user.id):
         return
     
-    # PRIORIDAD 2: Si es respuesta A/B/C/D
-    text = update.message.text.strip().upper()
-    if text in ["A", "B", "C", "D"]:
-        await handle_answer(update, context)
+    msg = await update.message.reply_text("🔄 Verificando catálogo...")
+    total = count_cases()
+    all_ids = get_all_case_ids()
+    
+    response = f"✅ Catálogo actualizado\n\n📊 Estado\nTotal de casos: {total}\n\n"
+    if all_ids:
+        response += "📋 Últimos 10 casos\n"
+        for case_id in all_ids[-10:]:
+            response += f"• {case_id}\n"
+    else:
+        response += "⚠️ No hay casos en la BD\n\n💡 Formato esperado\n###CASE_0001 #A#\n\nEjemplos válidos\n• ###CASE_0001 #A#\n• ###CASE_0001_PED_DENGUE #C#"
+    
+    await msg.edit_text(response)
+
+async def cmd_replace_caso(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from admin_panel import is_admin
+    if not is_admin(update.effective_user.id):
         return
-
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
     
-    if data.startswith("just_"):
-        await handle_justification_request(update, context)
-    elif data == "next_case":
-        await handle_next_case(update, context)
-    elif data.startswith("admin_"):
-        await handle_admin_callback(update, context)
-
-async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.exception("Error", exc_info=context.error)
-
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text("Uso: /replace_caso ###CASE_0001\n\nEsto eliminará el caso de la BD.\nLuego puedes enviar el nuevo caso con el mismo ID.")
+        return
     
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("random_cases", cmd_random_cases))
+    case_id = context.args[0]
+    caso = get_case_by_id(case_id)
     
-    app.add_handler(CommandHandler("admin", cmd_admin))
-    app.add_handler(CommandHandler("set_limit", cmd_set_limit))
-    app.add_handler(CommandHandler("set_sub", cmd_set_sub))
-    app.add_handler(CommandHandler("refresh_catalog", cmd_refresh_catalog))
-    app.add_handler(CommandHandler("replace_caso", cmd_replace_caso))
+    if not caso:
+        await update.message.reply_text(f"❌ Caso {case_id} no existe en BD")
+        return
     
-    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, handle_private_message))
-    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & (filters.PHOTO | filters.Document.ALL | filters.VIDEO | filters.AUDIO | filters.VOICE), handle_uploader_message))
-    app.add_handler(CallbackQueryHandler(handle_callback))
-    
-    app.add_error_handler(on_error)
-    
-    logger.info("🚀 Bot iniciado")
-    app.run_polling(allowed_updates=["message", "callback_query"])
-
-if __name__ == "__main__":
-    main()
+    delete_case(case_id)
+    await update.message.reply_text(f"✅ Caso {case_id} eliminado de la BD\n\nAhora puedes enviar el nuevo caso con el mismo ID.")
