@@ -185,25 +185,3 @@ def parse_message_with_buttons(text: str):
     keyboard = InlineKeyboardMarkup([buttons]) if buttons else None
     
     return clean_text, keyboard
-```
-
----
-
-## ✅ CAMBIOS FINALES
-
-1. ✅ **Logs detallados** → Ver en deploy qué está pasando
-2. ✅ **Soporte completo** → Foto, video, audio, documento, texto
-3. ✅ **set_sub/limit** → Crea usuario si no existe
-4. ✅ **Barra de progreso** → Restaurada
-5. ✅ **Sin forward visible** → Descarga y reenvía limpio
-
-**Después de hacer push, verifica los logs con:**
-```
-heroku logs --tail -a tu-app
-```
-
-Busca líneas como:
-```
-🔄 Descargando caso...
-✅ Foto enviada limpia (sin forward)
-🗑️ Forward temporal eliminado
