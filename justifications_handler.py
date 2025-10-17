@@ -46,21 +46,31 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     
     for just_id in justification_ids:
         try:
-            logger.info(f"🔄 Descargando justificación {just_id}")
+            logger.info(f"🔄 Descargando justificación {just_id} DIRECTO (sin forward visible)")
             
+            # PASO 1: Forward temporal SOLO para obtener info
             original_msg = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
                 message_id=just_id
             )
             
+            # PASO 2: Extraer datos del forward temporal
             text = original_msg.text or original_msg.caption or ""
             clean_text = JUST_CLEANUP_PATTERN.sub('', text).strip()
             
+            # PASO 3: BORRAR EL FORWARD TEMPORAL INMEDIATAMENTE
+            try:
+                await context.bot.delete_message(user_id, original_msg.message_id)
+                logger.info(f"🗑️ Forward temporal BORRADO antes de enviar limpio")
+            except Exception as del_err:
+                logger.warning(f"⚠️ No se pudo borrar forward temporal: {del_err}")
+            
+            # PASO 4: ENVIAR LIMPIO (descarga y reenvío sin "Reenviado de")
             sent_clean = False
             
             if original_msg.photo:
-                logger.info(f"📸 Procesando foto de justificación")
+                logger.info(f"📸 Enviando foto LIMPIA")
                 photo = original_msg.photo[-1]
                 file = await context.bot.get_file(photo.file_id)
                 
@@ -75,10 +85,10 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
                     protect_content=True
                 )
                 sent_clean = True
-                logger.info(f"✅ Foto de justificación enviada limpia")
+                logger.info(f"✅ Foto enviada SIN REENVIAR")
             
             elif original_msg.document:
-                logger.info(f"📄 Procesando documento de justificación")
+                logger.info(f"📄 Enviando documento LIMPIO")
                 doc = original_msg.document
                 file = await context.bot.get_file(doc.file_id)
                 
@@ -94,10 +104,10 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
                     protect_content=True
                 )
                 sent_clean = True
-                logger.info(f"✅ Documento de justificación enviado limpio")
+                logger.info(f"✅ Documento enviado SIN REENVIAR")
             
             elif original_msg.video:
-                logger.info(f"🎥 Procesando video de justificación")
+                logger.info(f"🎥 Enviando video LIMPIO")
                 video = original_msg.video
                 file = await context.bot.get_file(video.file_id)
                 
@@ -112,10 +122,10 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
                     protect_content=True
                 )
                 sent_clean = True
-                logger.info(f"✅ Video de justificación enviado limpio")
+                logger.info(f"✅ Video enviado SIN REENVIAR")
             
             elif original_msg.audio:
-                logger.info(f"🎵 Procesando audio de justificación")
+                logger.info(f"🎵 Enviando audio LIMPIO")
                 audio = original_msg.audio
                 file = await context.bot.get_file(audio.file_id)
                 
@@ -130,23 +140,17 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
                     protect_content=True
                 )
                 sent_clean = True
-                logger.info(f"✅ Audio de justificación enviado limpio")
+                logger.info(f"✅ Audio enviado SIN REENVIAR")
             
             elif clean_text:
-                logger.info(f"💬 Enviando texto de justificación")
+                logger.info(f"💬 Enviando texto LIMPIO")
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=clean_text,
                     protect_content=True
                 )
                 sent_clean = True
-                logger.info(f"✅ Texto de justificación enviado")
-            
-            try:
-                await context.bot.delete_message(user_id, original_msg.message_id)
-                logger.info(f"🗑️ Forward temporal de justificación eliminado")
-            except Exception as del_err:
-                logger.warning(f"⚠️ No se pudo borrar forward: {del_err}")
+                logger.info(f"✅ Texto enviado SIN REENVIAR")
             
             await asyncio.sleep(0.3)
             
