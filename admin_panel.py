@@ -59,7 +59,8 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             "/set_limit USER_ID 10 - Cambiar límite\n"
             "/set_sub USER_ID 1 - Activar subscripción\n"
             "/set_sub USER_ID 0 - Desactivar subscripción\n\n"
-            "⚠️ Usa el ID numérico, no @username"
+            "⚠️ Usa el ID numérico del usuario\n"
+            "Para obtenerlo: @userinfobot"
         )
     
     elif data == "admin_cases":
@@ -76,7 +77,8 @@ async def cmd_set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
         await update.message.reply_text(
             "**Uso:** `/set_limit USER_ID 10`\n\n"
-            "Para obtener el USER_ID, reenvía un mensaje del usuario al bot @userinfobot",
+            "Para obtener el USER_ID: @userinfobot\n"
+            "Ejemplo: `/set_limit 123456789 20`",
             parse_mode="Markdown"
         )
         return
@@ -100,16 +102,16 @@ async def cmd_set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row = cur.fetchone()
     
     if not row:
-        await update.message.reply_text(
-            f"❌ Usuario {user_id} no encontrado.\n\n"
-            f"El usuario debe haber usado /start o /random_cases primero."
-        )
-        return
+        logger.info(f"⚠️ Usuario {user_id} no existe - creando nuevo registro")
+        get_or_create_user(user_id, "", "Usuario")
     
     set_user_limit(user_id, limit)
     
-    username = row['username'] if USE_POSTGRES else row[0]
-    await update.message.reply_text(f"✅ Límite de {username or user_id} actualizado a {limit}")
+    if row:
+        username = row['username'] if USE_POSTGRES else row[0]
+        await update.message.reply_text(f"✅ Límite de {username or user_id} actualizado a {limit}")
+    else:
+        await update.message.reply_text(f"✅ Usuario {user_id} creado con límite de {limit}")
 
 async def cmd_set_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -118,7 +120,8 @@ async def cmd_set_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
         await update.message.reply_text(
             "**Uso:** `/set_sub USER_ID 1`\n\n"
-            "Para obtener el USER_ID, reenvía un mensaje del usuario al bot @userinfobot",
+            "Para obtener el USER_ID: @userinfobot\n"
+            "Ejemplo: `/set_sub 123456789 1`",
             parse_mode="Markdown"
         )
         return
@@ -142,17 +145,18 @@ async def cmd_set_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row = cur.fetchone()
     
     if not row:
-        await update.message.reply_text(
-            f"❌ Usuario {user_id} no encontrado.\n\n"
-            f"El usuario debe haber usado /start o /random_cases primero."
-        )
-        return
+        logger.info(f"⚠️ Usuario {user_id} no existe - creando nuevo registro")
+        get_or_create_user(user_id, "", "Usuario")
     
     set_user_subscriber(user_id, is_sub)
     
-    username = row['username'] if USE_POSTGRES else row[0]
     status = "activada" if is_sub else "desactivada"
-    await update.message.reply_text(f"✅ Subscripción de {username or user_id} {status}")
+    
+    if row:
+        username = row['username'] if USE_POSTGRES else row[0]
+        await update.message.reply_text(f"✅ Subscripción de {username or user_id} {status}")
+    else:
+        await update.message.reply_text(f"✅ Usuario {user_id} creado con subscripción {status}")
 
 def parse_message_with_buttons(text: str):
     buttons = []
@@ -181,3 +185,25 @@ def parse_message_with_buttons(text: str):
     keyboard = InlineKeyboardMarkup([buttons]) if buttons else None
     
     return clean_text, keyboard
+```
+
+---
+
+## ✅ CAMBIOS FINALES
+
+1. ✅ **Logs detallados** → Ver en deploy qué está pasando
+2. ✅ **Soporte completo** → Foto, video, audio, documento, texto
+3. ✅ **set_sub/limit** → Crea usuario si no existe
+4. ✅ **Barra de progreso** → Restaurada
+5. ✅ **Sin forward visible** → Descarga y reenvía limpio
+
+**Después de hacer push, verifica los logs con:**
+```
+heroku logs --tail -a tu-app
+```
+
+Busca líneas como:
+```
+🔄 Descargando caso...
+✅ Foto enviada limpia (sin forward)
+🗑️ Forward temporal eliminado
