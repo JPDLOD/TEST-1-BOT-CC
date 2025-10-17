@@ -1,31 +1,13 @@
 # -*- coding: utf-8 -*-
 import logging
-import re
 import asyncio
-import io
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
 
-from config import JUSTIFICATIONS_CHAT_ID
 from database import get_justifications_for_case, increment_daily_progress
 
 logger = logging.getLogger(__name__)
-
-JUST_PATTERN = re.compile(r'###JUST[_\s]*(\d{3,})', re.IGNORECASE)
-JUST_CLEANUP_PATTERN = re.compile(r'###JUST[_\s]*\d{3,}', re.IGNORECASE)
-
-async def detect_justification_from_message(message_id: int, text: str):
-    just_match = JUST_PATTERN.search(text)
-    if not just_match:
-        return
-    
-    case_id = f"#{just_match.group(1)}"
-    
-    from database import save_justification
-    save_justification(case_id, message_id)
-    
-    logger.info(f"Justificación detectada: {case_id} → {message_id}")
 
 async def handle_justification_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -38,124 +20,57 @@ async def handle_justification_request(update: Update, context: ContextTypes.DEF
     case_id = data.replace("just_", "")
     user_id = query.from_user.id
     
-    justification_ids = get_justifications_for_case(case_id)
+    justifications = get_justifications_for_case(case_id)
     
-    if not justification_ids:
+    if not justifications:
         await query.edit_message_text("❌ Justificación no disponible")
         return
     
-    for just_id in justification_ids:
+    for file_id, file_type, caption in justifications:
         try:
-            logger.info(f"🔄 Descargando justificación {just_id} DIRECTO (sin forward visible)")
+            logger.info(f"📤 Enviando justificación ({file_type}) con file_id")
             
-            # PASO 1: Forward temporal SOLO para obtener info
-            original_msg = await context.bot.forward_message(
-                chat_id=user_id,
-                from_chat_id=JUSTIFICATIONS_CHAT_ID,
-                message_id=just_id
-            )
-            
-            # PASO 2: Extraer datos del forward temporal
-            text = original_msg.text or original_msg.caption or ""
-            clean_text = JUST_CLEANUP_PATTERN.sub('', text).strip()
-            
-            # PASO 3: BORRAR EL FORWARD TEMPORAL INMEDIATAMENTE
-            try:
-                await context.bot.delete_message(user_id, original_msg.message_id)
-                logger.info(f"🗑️ Forward temporal BORRADO antes de enviar limpio")
-            except Exception as del_err:
-                logger.warning(f"⚠️ No se pudo borrar forward temporal: {del_err}")
-            
-            # PASO 4: ENVIAR LIMPIO (descarga y reenvío sin "Reenviado de")
-            sent_clean = False
-            
-            if original_msg.photo:
-                logger.info(f"📸 Enviando foto LIMPIA")
-                photo = original_msg.photo[-1]
-                file = await context.bot.get_file(photo.file_id)
-                
-                photo_bytes = io.BytesIO()
-                await file.download_to_memory(photo_bytes)
-                photo_bytes.seek(0)
-                
-                await context.bot.send_photo(
-                    chat_id=user_id,
-                    photo=photo_bytes,
-                    caption=clean_text if clean_text else None,
-                    protect_content=True
-                )
-                sent_clean = True
-                logger.info(f"✅ Foto enviada SIN REENVIAR")
-            
-            elif original_msg.document:
-                logger.info(f"📄 Enviando documento LIMPIO")
-                doc = original_msg.document
-                file = await context.bot.get_file(doc.file_id)
-                
-                doc_bytes = io.BytesIO()
-                await file.download_to_memory(doc_bytes)
-                doc_bytes.seek(0)
-                
+            # Enviar DIRECTO con file_id
+            if file_type == "document":
                 await context.bot.send_document(
                     chat_id=user_id,
-                    document=doc_bytes,
-                    caption=clean_text if clean_text else None,
-                    filename=doc.file_name or "justificacion.pdf",
+                    document=file_id,
+                    caption=caption if caption else None,
                     protect_content=True
                 )
-                sent_clean = True
-                logger.info(f"✅ Documento enviado SIN REENVIAR")
-            
-            elif original_msg.video:
-                logger.info(f"🎥 Enviando video LIMPIO")
-                video = original_msg.video
-                file = await context.bot.get_file(video.file_id)
-                
-                video_bytes = io.BytesIO()
-                await file.download_to_memory(video_bytes)
-                video_bytes.seek(0)
-                
+            elif file_type == "photo":
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=file_id,
+                    caption=caption if caption else None,
+                    protect_content=True
+                )
+            elif file_type == "video":
                 await context.bot.send_video(
                     chat_id=user_id,
-                    video=video_bytes,
-                    caption=clean_text if clean_text else None,
+                    video=file_id,
+                    caption=caption if caption else None,
                     protect_content=True
                 )
-                sent_clean = True
-                logger.info(f"✅ Video enviado SIN REENVIAR")
-            
-            elif original_msg.audio:
-                logger.info(f"🎵 Enviando audio LIMPIO")
-                audio = original_msg.audio
-                file = await context.bot.get_file(audio.file_id)
-                
-                audio_bytes = io.BytesIO()
-                await file.download_to_memory(audio_bytes)
-                audio_bytes.seek(0)
-                
+            elif file_type == "audio":
                 await context.bot.send_audio(
                     chat_id=user_id,
-                    audio=audio_bytes,
-                    caption=clean_text if clean_text else None,
+                    audio=file_id,
+                    caption=caption if caption else None,
                     protect_content=True
                 )
-                sent_clean = True
-                logger.info(f"✅ Audio enviado SIN REENVIAR")
-            
-            elif clean_text:
-                logger.info(f"💬 Enviando texto LIMPIO")
+            elif file_type == "text":
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=clean_text,
+                    text=caption,
                     protect_content=True
                 )
-                sent_clean = True
-                logger.info(f"✅ Texto enviado SIN REENVIAR")
             
+            logger.info(f"✅ Justificación enviada exitosamente")
             await asyncio.sleep(0.3)
             
         except TelegramError as e:
-            logger.error(f"❌ Error enviando justificación {just_id}: {e}")
+            logger.error(f"❌ Error enviando justificación: {e}")
     
     try:
         from justification_messages import get_weighted_random_message
