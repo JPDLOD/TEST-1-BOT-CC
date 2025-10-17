@@ -21,7 +21,7 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📚 Info casos", callback_data="admin_cases")]
     ])
     
-    await update.message.reply_text("🔐 Panel de Administración\n\nSelecciona una opción:", reply_markup=keyboard)
+    await update.message.reply_text("🔐 Panel de Administración\n\nSelecciona una opción", reply_markup=keyboard)
 
 async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -37,7 +37,7 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         total_users = len(get_all_users())
         subs = len(get_subscribers())
         cases = len(get_all_case_ids())
-        await query.edit_message_text(f"📊 Estadísticas:\n\n👥 Usuarios totales: {total_users}\n⭐ Subscriptores: {subs}\n📚 Casos disponibles: {cases}")
+        await query.edit_message_text(f"📊 Estadísticas\n\n👥 Usuarios totales: {total_users}\n⭐ Subscriptores: {subs}\n📚 Casos disponibles: {cases}")
     
     elif data == "admin_users":
         await query.edit_message_text("👥 Gestión de Usuarios\n\nComandos:\n/set_limit USER_ID 10 - Cambiar límite\n/set_sub USER_ID 1 - Activar subscripción")
@@ -51,7 +51,7 @@ async def cmd_set_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if len(context.args) < 2:
-        await update.message.reply_text("**Uso:** `/set_limit USER_ID 10`", parse_mode="Markdown")
+        await update.message.reply_text("Uso: /set_limit USER_ID 10")
         return
     
     try:
@@ -70,7 +70,7 @@ async def cmd_set_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if len(context.args) < 2:
-        await update.message.reply_text("**Uso:** `/set_sub USER_ID 1`", parse_mode="Markdown")
+        await update.message.reply_text("Uso: /set_sub USER_ID 1")
         return
     
     try:
