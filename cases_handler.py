@@ -3,6 +3,7 @@ import logging
 import random
 import re
 import asyncio
+import io
 from typing import Set
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
@@ -112,7 +113,8 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
     tries = 0
     while tries < MAX_RETRIES:
         try:
-            # SOLUCIÓN DEFINITIVA: Descargar y reenviar sin forward
+            logger.info(f"🔄 Descargando caso {case_id} desde canal...")
+            
             original_msg = await context.bot.forward_message(
                 chat_id=user_id,
                 from_chat_id=JUSTIFICATIONS_CHAT_ID,
@@ -124,31 +126,28 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
             
             sent_clean = False
             
-            # Si tiene foto, descargarla y reenviarla
             if original_msg.photo:
+                logger.info(f"📸 Procesando foto del caso {case_id}")
                 photo = original_msg.photo[-1]
                 file = await context.bot.get_file(photo.file_id)
                 
-                # Descargar a bytes
-                import io
                 photo_bytes = io.BytesIO()
                 await file.download_to_memory(photo_bytes)
                 photo_bytes.seek(0)
                 
-                # Enviar como nueva (SIN forward)
                 await context.bot.send_photo(
                     chat_id=user_id,
                     photo=photo_bytes,
                     caption=clean_text if clean_text else None
                 )
                 sent_clean = True
+                logger.info(f"✅ Foto enviada limpia (sin forward)")
             
-            # Si tiene documento
             elif original_msg.document:
+                logger.info(f"📄 Procesando documento del caso {case_id}")
                 doc = original_msg.document
                 file = await context.bot.get_file(doc.file_id)
                 
-                import io
                 doc_bytes = io.BytesIO()
                 await file.download_to_memory(doc_bytes)
                 doc_bytes.seek(0)
@@ -157,26 +156,80 @@ async def send_case(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id:
                     chat_id=user_id,
                     document=doc_bytes,
                     caption=clean_text if clean_text else None,
-                    filename=doc.file_name or "documento"
+                    filename=doc.file_name or "documento.pdf"
                 )
                 sent_clean = True
+                logger.info(f"✅ Documento enviado limpio (sin forward)")
             
-            # Solo texto
+            elif original_msg.video:
+                logger.info(f"🎥 Procesando video del caso {case_id}")
+                video = original_msg.video
+                file = await context.bot.get_file(video.file_id)
+                
+                video_bytes = io.BytesIO()
+                await file.download_to_memory(video_bytes)
+                video_bytes.seek(0)
+                
+                await context.bot.send_video(
+                    chat_id=user_id,
+                    video=video_bytes,
+                    caption=clean_text if clean_text else None
+                )
+                sent_clean = True
+                logger.info(f"✅ Video enviado limpio (sin forward)")
+            
+            elif original_msg.audio:
+                logger.info(f"🎵 Procesando audio del caso {case_id}")
+                audio = original_msg.audio
+                file = await context.bot.get_file(audio.file_id)
+                
+                audio_bytes = io.BytesIO()
+                await file.download_to_memory(audio_bytes)
+                audio_bytes.seek(0)
+                
+                await context.bot.send_audio(
+                    chat_id=user_id,
+                    audio=audio_bytes,
+                    caption=clean_text if clean_text else None
+                )
+                sent_clean = True
+                logger.info(f"✅ Audio enviado limpio (sin forward)")
+            
+            elif original_msg.voice:
+                logger.info(f"🎤 Procesando nota de voz del caso {case_id}")
+                voice = original_msg.voice
+                file = await context.bot.get_file(voice.file_id)
+                
+                voice_bytes = io.BytesIO()
+                await file.download_to_memory(voice_bytes)
+                voice_bytes.seek(0)
+                
+                await context.bot.send_voice(
+                    chat_id=user_id,
+                    voice=voice_bytes
+                )
+                if clean_text:
+                    await context.bot.send_message(chat_id=user_id, text=clean_text)
+                sent_clean = True
+                logger.info(f"✅ Nota de voz enviada limpia (sin forward)")
+            
             elif clean_text:
+                logger.info(f"💬 Enviando texto del caso {case_id}")
                 await context.bot.send_message(chat_id=user_id, text=clean_text)
                 sent_clean = True
+                logger.info(f"✅ Texto enviado limpio")
             
-            # BORRAR el forward original
             try:
                 await context.bot.delete_message(user_id, original_msg.message_id)
-            except:
-                pass
+                logger.info(f"🗑️ Forward temporal eliminado")
+            except Exception as del_err:
+                logger.warning(f"⚠️ No se pudo borrar forward: {del_err}")
             
             if sent_clean:
                 save_user_sent_case(user_id, case_id)
                 break
             else:
-                logger.error(f"❌ No se pudo enviar caso {case_id}")
+                logger.error(f"❌ No se pudo enviar caso {case_id} - tipo no soportado")
                 session["current_index"] += 1
                 await send_case(update, context, user_id)
                 return
@@ -297,7 +350,6 @@ async def finish_session(update: Update, context: ContextTypes.DEFAULT_TYPE, use
     correct = session["correct_count"]
     percentage = int((correct / total) * 100) if total > 0 else 0
     
-    # Crear barra visual
     filled = int((correct / total) * 5) if total > 0 else 0
     progress_bar = "█" * filled + "░" * (5 - filled)
     
