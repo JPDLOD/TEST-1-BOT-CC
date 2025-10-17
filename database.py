@@ -42,7 +42,9 @@ def _get_conn():
 _schema_postgres = """
 CREATE TABLE IF NOT EXISTS clinical_cases (
   case_id TEXT PRIMARY KEY,
-  message_id BIGINT NOT NULL,
+  file_id TEXT NOT NULL,
+  file_type TEXT NOT NULL,
+  caption TEXT,
   specialty TEXT,
   topic TEXT,
   subtopic TEXT,
@@ -54,7 +56,9 @@ CREATE INDEX IF NOT EXISTS idx_cases_specialty ON clinical_cases(specialty);
 CREATE TABLE IF NOT EXISTS justifications (
   id SERIAL PRIMARY KEY,
   case_id TEXT NOT NULL,
-  message_id BIGINT NOT NULL,
+  file_id TEXT NOT NULL,
+  file_type TEXT NOT NULL,
+  caption TEXT,
   created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
 );
 CREATE INDEX IF NOT EXISTS idx_just_case ON justifications(case_id);
@@ -108,7 +112,9 @@ CREATE TABLE IF NOT EXISTS daily_progress (
 _schema_sqlite = """
 CREATE TABLE IF NOT EXISTS clinical_cases (
   case_id TEXT PRIMARY KEY,
-  message_id INTEGER NOT NULL,
+  file_id TEXT NOT NULL,
+  file_type TEXT NOT NULL,
+  caption TEXT,
   specialty TEXT,
   topic TEXT,
   subtopic TEXT,
@@ -120,7 +126,9 @@ CREATE INDEX IF NOT EXISTS idx_cases_specialty ON clinical_cases(specialty);
 CREATE TABLE IF NOT EXISTS justifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   case_id TEXT NOT NULL,
-  message_id INTEGER NOT NULL,
+  file_id TEXT NOT NULL,
+  file_type TEXT NOT NULL,
+  caption TEXT,
   created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_just_case ON justifications(case_id);
@@ -193,25 +201,27 @@ def parse_case_id(case_id: str) -> Dict[str, str]:
         'subtopic': parts[3] if len(parts) > 3 else ''
     }
 
-def save_case(case_id: str, message_id: int, correct_answer: str = ""):
+def save_case(case_id: str, file_id: str, file_type: str, caption: str = "", correct_answer: str = ""):
     parsed = parse_case_id(case_id)
     conn = _get_conn()
     
     if USE_POSTGRES:
         with conn.cursor() as cur:
             cur.execute(
-                """INSERT INTO clinical_cases(case_id, message_id, specialty, topic, subtopic, correct_answer) 
-                   VALUES (%s, %s, %s, %s, %s, %s) 
+                """INSERT INTO clinical_cases(case_id, file_id, file_type, caption, specialty, topic, subtopic, correct_answer) 
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s) 
                    ON CONFLICT (case_id) DO UPDATE SET 
-                   message_id=EXCLUDED.message_id, 
+                   file_id=EXCLUDED.file_id,
+                   file_type=EXCLUDED.file_type,
+                   caption=EXCLUDED.caption,
                    correct_answer=EXCLUDED.correct_answer""",
-                (case_id, message_id, parsed['specialty'], parsed['topic'], parsed['subtopic'], correct_answer)
+                (case_id, file_id, file_type, caption, parsed['specialty'], parsed['topic'], parsed['subtopic'], correct_answer)
             )
     else:
         conn.execute(
-            """INSERT OR REPLACE INTO clinical_cases(case_id, message_id, specialty, topic, subtopic, correct_answer) 
-               VALUES (?,?,?,?,?,?)""",
-            (case_id, message_id, parsed['specialty'], parsed['topic'], parsed['subtopic'], correct_answer)
+            """INSERT OR REPLACE INTO clinical_cases(case_id, file_id, file_type, caption, specialty, topic, subtopic, correct_answer) 
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (case_id, file_id, file_type, caption, parsed['specialty'], parsed['topic'], parsed['subtopic'], correct_answer)
         )
         conn.commit()
 
@@ -224,13 +234,15 @@ def delete_case(case_id: str):
         conn.execute("DELETE FROM clinical_cases WHERE case_id=?", (case_id,))
         conn.commit()
 
-def save_justification(case_id: str, message_id: int):
+def save_justification(case_id: str, file_id: str, file_type: str, caption: str = ""):
     conn = _get_conn()
     if USE_POSTGRES:
         with conn.cursor() as cur:
-            cur.execute("INSERT INTO justifications(case_id, message_id) VALUES (%s, %s)", (case_id, message_id))
+            cur.execute("INSERT INTO justifications(case_id, file_id, file_type, caption) VALUES (%s, %s, %s, %s)", 
+                       (case_id, file_id, file_type, caption))
     else:
-        conn.execute("INSERT INTO justifications(case_id, message_id) VALUES (?,?)", (case_id, message_id))
+        conn.execute("INSERT INTO justifications(case_id, file_id, file_type, caption) VALUES (?,?,?,?)", 
+                    (case_id, file_id, file_type, caption))
         conn.commit()
 
 def get_all_case_ids() -> List[str]:
@@ -247,22 +259,22 @@ def get_case_by_id(case_id: str) -> Optional[Tuple]:
     conn = _get_conn()
     if USE_POSTGRES:
         with conn.cursor() as cur:
-            cur.execute("SELECT case_id, message_id, correct_answer FROM clinical_cases WHERE case_id=%s", (case_id,))
+            cur.execute("SELECT case_id, file_id, file_type, caption, correct_answer FROM clinical_cases WHERE case_id=%s", (case_id,))
             row = cur.fetchone()
-            return (row['case_id'], row['message_id'], row['correct_answer']) if row else None
+            return (row['case_id'], row['file_id'], row['file_type'], row['caption'], row['correct_answer']) if row else None
     else:
-        cur = conn.execute("SELECT case_id, message_id, correct_answer FROM clinical_cases WHERE case_id=?", (case_id,))
+        cur = conn.execute("SELECT case_id, file_id, file_type, caption, correct_answer FROM clinical_cases WHERE case_id=?", (case_id,))
         return cur.fetchone()
 
-def get_justifications_for_case(case_id: str) -> List[int]:
+def get_justifications_for_case(case_id: str) -> List[Tuple[str, str, str]]:
     conn = _get_conn()
     if USE_POSTGRES:
         with conn.cursor() as cur:
-            cur.execute("SELECT message_id FROM justifications WHERE case_id=%s ORDER BY id", (case_id,))
-            return [row['message_id'] for row in cur.fetchall()]
+            cur.execute("SELECT file_id, file_type, caption FROM justifications WHERE case_id=%s ORDER BY id", (case_id,))
+            return [(row['file_id'], row['file_type'], row['caption']) for row in cur.fetchall()]
     else:
-        cur = conn.execute("SELECT message_id FROM justifications WHERE case_id=? ORDER BY id", (case_id,))
-        return [row[0] for row in cur.fetchall()]
+        cur = conn.execute("SELECT file_id, file_type, caption FROM justifications WHERE case_id=? ORDER BY id", (case_id,))
+        return [(row[0], row[1], row[2]) for row in cur.fetchall()]
 
 def get_user_sent_cases(user_id: int) -> Set[str]:
     conn = _get_conn()
